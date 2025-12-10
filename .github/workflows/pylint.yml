@@ -2,7 +2,14 @@ name: Pylint
 
 permissions:
   contents: read
-on: [push]
+on:
+  push:
+    paths-ignore:
+      - '.github/copilot-instructions.md'
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
 
 jobs:
   build:
