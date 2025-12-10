@@ -36,7 +36,9 @@ class YAMLFileStore:
                 return yaml.safe_load(f) or {}
         except FileNotFoundError:
             return {}
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
+            # Intentionally catch all exceptions to prevent YAML parsing errors
+            # from crashing the bot
             logger.exception("Failed to read YAML file %s", self.path)
             return {}
 

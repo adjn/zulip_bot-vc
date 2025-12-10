@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
+    """Initialize and run the Zulip bot with all configured features."""
     # Basic logging setup
     logging.basicConfig(
         level=logging.INFO,

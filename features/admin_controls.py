@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AdminControlsFeature(FeatureHandler):
+    """Admin-only commands for runtime bot configuration.
+    
+    Attributes:
+        client: Zulip client for sending messages
+        config_mgr: Configuration manager
+        scheduler: Message deletion scheduler
+    """
     client: ZulipTrioClient
     config_mgr: ConfigManager
     scheduler: DeletionScheduler
@@ -58,12 +65,14 @@ class AdminControlsFeature(FeatureHandler):
                 "Unknown admin command. Supported: !config, !anon, !access",
             )
 
-    async def _handle_config(self, cmd: str, body: str, event: MessageEvent) -> None:
+    async def _handle_config(
+        self, cmd: str, body: str, event: MessageEvent  # pylint: disable=unused-argument
+    ) -> None:
         """Handle !config admin commands.
         
         Args:
             cmd: Command line (e.g., '!config show')
-            body: Additional body text if any
+            body: Additional body text if any (reserved for future use)
             event: Message event from admin
         """
         # For now only "show"
@@ -82,11 +91,20 @@ class AdminControlsFeature(FeatureHandler):
                 "Usage: `!config show`",
             )
 
-    async def _handle_anon(self, cmd: str, body: str, event: MessageEvent) -> None:
-        """
-        !anon set stream <name>
-        !anon set topic <name>
-        !anon set delete_after_minutes <int>
+    async def _handle_anon(
+        self, cmd: str, body: str, event: MessageEvent  # pylint: disable=unused-argument
+    ) -> None:
+        """Handle !anon admin commands.
+        
+        Commands:
+            !anon set stream <name>
+            !anon set topic <name>
+            !anon set delete_after_minutes <int>
+        
+        Args:
+            cmd: Command line
+            body: Additional body text (reserved for future use)
+            event: Message event from admin
         """
         parts = cmd.split()
         if len(parts) != 4 or parts[1] != "set":

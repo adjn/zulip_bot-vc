@@ -95,7 +95,8 @@ class PrivateAccessFeature(FeatureHandler):
                 continue
             if normalize_phrase(r.phrase) == msg_norm:
                 logger.info(
-                    "PrivateAccess: subscribing sender_id=%s to target_stream=%s due to phrase match",
+                    "PrivateAccess: subscribing sender_id=%s to target_stream=%s "
+                    "due to phrase match",
                     event.sender_id,
                     r.target_stream,
                 )

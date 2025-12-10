@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 
 @dataclass
-class MessageEvent:
+class MessageEvent:  # pylint: disable=too-many-instance-attributes
     """Represents a parsed Zulip message event.
     
     Attributes:

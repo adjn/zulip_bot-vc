@@ -65,7 +65,9 @@ class DeletionScheduler:
         while True:
             try:
                 await self._run_once()
-            except Exception:  # pragma: no cover - defensive
+            except Exception:  # pylint: disable=broad-exception-caught
+                # Intentionally catch all exceptions to keep scheduler running
+                # even if individual deletions fail
                 logger.exception("Error in DeletionScheduler loop")
             await trio.sleep(60)
 
