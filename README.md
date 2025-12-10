@@ -210,6 +210,19 @@ These admin capabilities are **enabled by default** (no config flag to turn them
 
 **Common commands:**
 
+### Subscribe bot to streams
+
+```text
+!subscribe <stream1> [stream2] [stream3] ...
+```
+
+Example:
+```text
+!subscribe general announcements anonymous
+```
+
+This subscribes the bot to the specified streams so it can monitor them and post messages. The bot will respond with confirmation of which streams were newly subscribed and which it was already subscribed to.
+
 ### Show config
 
 ```text
@@ -220,13 +233,19 @@ Bot responds with current config in YAML (in a code block).
 
 ### Configure anonymous posting
 
+**Show current anonymous posting settings:**
+```text
+!anon show
+```
+
+**Update settings:**
 ```text
 !anon set stream anonymous
 !anon set topic general
 !anon set delete_after_minutes 10080
 ```
 
-You still need to set `anonymous_posting.enabled: true` in `config.yaml` (manually) or extend admin commands if you want to toggle `enabled` via commands in the future.
+The bot will confirm each change. You still need to set `anonymous_posting.enabled: true` in `config.yaml` (manually) or extend admin commands if you want to toggle `enabled` via commands in the future.
 
 ### Manage access rules
 

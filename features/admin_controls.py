@@ -59,10 +59,12 @@ class AdminControlsFeature(FeatureHandler):
             await self._handle_anon(cmd_line, body, event)
         elif cmd_line.startswith("!access"):
             await self._handle_access(cmd_line, body, event)
+        elif cmd_line.startswith("!subscribe"):
+            await self._handle_subscribe(cmd_line, body, event)
         else:
             await self.client.send_private_message(
                 event.sender_id,
-                "Unknown admin command. Supported: !config, !anon, !access",
+                "Unknown admin command. Supported: !config, !anon, !access, !subscribe",
             )
 
     async def _handle_config(
@@ -107,14 +109,30 @@ class AdminControlsFeature(FeatureHandler):
             event: Message event from admin
         """
         parts = cmd.split()
+        
+        # Handle !anon show
+        if len(parts) == 2 and parts[1] == "show":
+            cfg = self.config_mgr.get()
+            anon_cfg = cfg.get("anonymous_posting", {})
+            await self.client.send_private_message(
+                event.sender_id,
+                f"**Anonymous Posting Configuration:**\n"
+                f"• Stream: `{anon_cfg.get('target_stream', 'anonymous')}`\n"
+                f"• Topic: `{anon_cfg.get('target_topic', 'general')}`\n"
+                f"• Delete after: {anon_cfg.get('delete_after_minutes', 10080)} minutes "
+                f"({anon_cfg.get('delete_after_minutes', 10080) // 60 // 24} days)",
+            )
+            return
+        
         if len(parts) != 4 or parts[1] != "set":
             await self.client.send_private_message(
                 event.sender_id,
                 (
                     "Usage:\n"
-                    "`!anon set stream <name>`\n"
-                    "`!anon set topic <name>`\n"
-                    "`!anon set delete_after_minutes <int>`"
+                    "`!anon show` - Show current settings\n"
+                    "`!anon set stream <name>` - Set target stream\n"
+                    "`!anon set topic <name>` - Set target topic\n"
+                    "`!anon set delete_after_minutes <int>` - Set deletion delay"
                 ),
             )
             return
@@ -251,4 +269,66 @@ class AdminControlsFeature(FeatureHandler):
             await self.client.send_private_message(
                 event.sender_id,
                 f"Access rules removed: {removed}.",
+            )
+
+    async def _handle_subscribe(
+        self, cmd: str, body: str, event: MessageEvent  # pylint: disable=unused-argument
+    ) -> None:
+        """Handle !subscribe command to subscribe bot to streams.
+        
+        Commands:
+            !subscribe <stream1> [stream2] [stream3] ...
+        
+        Args:
+            cmd: Command line with stream names
+            body: Additional body text (reserved for future use)
+            event: Message event from admin
+        """
+        parts = cmd.split()
+        if len(parts) < 2:
+            await self.client.send_private_message(
+                event.sender_id,
+                "Usage: `!subscribe <stream1> [stream2] [stream3] ...`\n"
+                "Example: `!subscribe general announcements anonymous`",
+            )
+            return
+
+        streams = parts[1:]  # Everything after !subscribe
+        
+        # Subscribe the bot to the streams
+        result = await self.client.subscribe_bot_to_streams(streams)
+        
+        if result.get("result") == "success":
+            subscribed = result.get("subscribed", {})
+            already_subscribed = result.get("already_subscribed", {})
+            
+            response_parts = []
+            if subscribed:
+                bot_email = list(subscribed.keys())[0] if subscribed else "bot"
+                new_streams = subscribed.get(bot_email, [])
+                if new_streams:
+                    response_parts.append(
+                        f"✅ Subscribed to: {', '.join(new_streams)}"
+                    )
+            
+            if already_subscribed:
+                bot_email = list(already_subscribed.keys())[0] if already_subscribed else "bot"
+                existing = already_subscribed.get(bot_email, [])
+                if existing:
+                    response_parts.append(
+                        f"ℹ️ Already subscribed to: {', '.join(existing)}"
+                    )
+            
+            if not response_parts:
+                response_parts.append("✅ Subscription request completed")
+            
+            await self.client.send_private_message(
+                event.sender_id,
+                "\n".join(response_parts),
+            )
+        else:
+            error_msg = result.get("msg", "Unknown error")
+            await self.client.send_private_message(
+                event.sender_id,
+                f"❌ Failed to subscribe: {error_msg}",
             )

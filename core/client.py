@@ -112,6 +112,12 @@ class ZulipTrioClient:
     async def add_user_subscriptions(
         self, user_id: int, streams: Iterable[str]
     ) -> None:
+        """Subscribe a user to one or more streams.
+        
+        Args:
+            user_id: ID of the user to subscribe
+            streams: Stream names to subscribe to
+        """
         stream_names = list(streams)
         if not stream_names:
             return
@@ -125,6 +131,27 @@ class ZulipTrioClient:
         res = await trio.to_thread.run_sync(_subscribe)
         if res.get("result") != "success":
             logger.warning("Failed to subscribe user %s to %s: %s", user_id, stream_names, res)
+
+    async def subscribe_bot_to_streams(self, streams: Iterable[str]) -> Dict[str, Any]:
+        """Subscribe the bot itself to one or more streams.
+        
+        Args:
+            streams: Stream names to subscribe to
+            
+        Returns:
+            Result dictionary from Zulip API
+        """
+        stream_names = list(streams)
+        if not stream_names:
+            return {"result": "error", "msg": "No streams provided"}
+
+        def _subscribe() -> Dict[str, Any]:
+            return self._client.add_subscriptions(
+                streams=[{"name": s} for s in stream_names],
+            )
+
+        res = await trio.to_thread.run_sync(_subscribe)
+        return res
 
     async def delete_message(self, message_id: int) -> bool:
         def _delete() -> Dict[str, Any]:
