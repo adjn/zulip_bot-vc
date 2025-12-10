@@ -44,12 +44,10 @@ class ZulipTrioClient:
         while True:
             def _get_events() -> Dict[str, Any]:
                 return self._client.get_events(
-                    {
-                        "queue_id": queue_id,
-                        "last_event_id": last_event_id,
-                        "dont_block": False,
-                        "timeout": 90,
-                    }
+                    queue_id=queue_id,
+                    last_event_id=last_event_id,
+                    dont_block=False,
+                    timeout=90,
                 )
 
             res = await trio.to_thread.run_sync(_get_events)
