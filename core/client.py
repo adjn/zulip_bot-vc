@@ -72,7 +72,7 @@ class ZulipTrioClient:
         while True:
             try:
                 logger.debug("Polling for events (long-poll, timeout=90s)...")
-                
+
                 def _get_events() -> Dict[str, Any]:
                     return self._client.get_events(
                         queue_id=queue_id,
@@ -82,10 +82,10 @@ class ZulipTrioClient:
                     )
 
                 res = await trio.to_thread.run_sync(_get_events)
-                
+
                 # Log rate limit info on each poll
                 self._log_rate_limit_info(res)
-                
+
                 # Check for rate limiting
                 if res.get("code") == "RATE_LIMIT_HIT":
                     retry_after = self._get_rate_limit_reset(res)
@@ -97,7 +97,7 @@ class ZulipTrioClient:
                     )
                     await trio.sleep(retry_after)
                     continue
-                
+
                 if res.get("result") != "success":
                     logger.warning("Error from get_events: %s", json.dumps(res))
                     # Back off on errors to avoid hammering the server
@@ -105,73 +105,86 @@ class ZulipTrioClient:
                     continue
 
                 events = res.get("events", [])
-                
+
                 # If no events, the long-poll timed out naturally - this is expected
                 # and we should immediately retry without delay
                 if not events:
                     continue
-                
+
                 # Process events
                 for event in events:
                     last_event_id = max(last_event_id, event.get("id", last_event_id))
                     yield event
-                    
-            except Exception as e:
-                logger.error("Unexpected error in event loop: %s", e, exc_info=True)
+
+            except (OSError, ConnectionError, TimeoutError) as e:
+                logger.error("Network error in event loop: %s", e, exc_info=True)
                 # Back off on unexpected errors
                 await trio.sleep(10)
-    
+
     def _get_rate_limit_reset(self, response: Dict[str, Any]) -> float:
-        """Extract rate limit reset time from response.
+        """Extract rate limit reset time from X-RateLimit-Reset header.
+        
+        According to Zulip docs, X-RateLimit-Reset is the time at which
+        the client will no longer have any rate limits applied.
         
         Args:
-            response: API response that may contain rate limit info
+            response: API response that may contain X-RateLimit-Reset header
             
         Returns:
             Number of seconds to wait before retrying
         """
-        # Check if retry-after is in the response
-        retry_after = response.get("retry-after")
-        if retry_after:
-            try:
-                return float(retry_after)
-            except (ValueError, TypeError):
-                pass
-        
-        # Check for X-RateLimit-Reset header in response
-        # The Zulip client may expose this in the response dict
-        reset_time = response.get("x-ratelimit-reset") or response.get("X-RateLimit-Reset")
+        # Check for X-RateLimit-Reset header (Unix timestamp)
+        reset_time = response.get("X-RateLimit-Reset")
         if reset_time:
             try:
                 reset_timestamp = float(reset_time)
-                wait_time = max(0, reset_timestamp - time.time())
+                wait_time = max(1.0, reset_timestamp - time.time())
+                logger.info(
+                    "Rate limit reset at %s (waiting %.1f seconds)",
+                    reset_timestamp, wait_time
+                )
                 return wait_time
             except (ValueError, TypeError):
-                pass
-        
-        # Default fallback: wait 60 seconds if we can't determine the reset time
-        logger.warning("Could not determine rate limit reset time, using default 60s")
+                logger.warning("Invalid X-RateLimit-Reset value: %s", reset_time)
+
+        # Default fallback: wait 60 seconds if header not present
+        logger.warning("X-RateLimit-Reset header not found, using default 60s")
         return 60.0
-    
+
     def _log_rate_limit_info(self, response: Dict[str, Any]) -> None:
-        """Log rate limit information from response headers if available.
+        """Log rate limit information from X-RateLimit-* headers.
         
+        Uses the official Zulip rate limit headers:
+        - X-RateLimit-Remaining: Requests remaining before hitting limit
+        - X-RateLimit-Limit: Maximum requests allowed
+        - X-RateLimit-Reset: Unix timestamp when limit resets
+
         Args:
             response: API response that may contain rate limit headers
         """
-        remaining = response.get("x-ratelimit-remaining") or response.get("X-RateLimit-Remaining")
-        limit = response.get("x-ratelimit-limit") or response.get("X-RateLimit-Limit")
-        
+        remaining = response.get("X-RateLimit-Remaining")
+        limit = response.get("X-RateLimit-Limit")
+        reset_time = response.get("X-RateLimit-Reset")
+
         if remaining is not None and limit is not None:
             try:
                 remaining_count = int(remaining)
                 total_limit = int(limit)
                 # Warn if we're using more than 80% of the limit
                 if remaining_count < (total_limit * 0.2):
+                    reset_msg = ""
+                    if reset_time:
+                        try:
+                            reset_timestamp = float(reset_time)
+                            wait_time = max(0, reset_timestamp - time.time())
+                            reset_msg = f" (resets in {wait_time:.0f}s)"
+                        except (ValueError, TypeError):
+                            pass
                     logger.warning(
-                        "Approaching rate limit: %s/%s requests remaining",
+                        "Approaching rate limit: %s/%s requests remaining%s",
                         remaining_count,
-                        total_limit
+                        total_limit,
+                        reset_msg
                     )
             except (ValueError, TypeError):
                 pass
@@ -179,7 +192,7 @@ class ZulipTrioClient:
     async def send_private_message(self, to_user_id: int, content: str) -> Optional[int]:
         """Send a private message to a user with rate limit handling."""
         max_retries = 3
-        
+
         for attempt in range(max_retries):
             def _send() -> Dict[str, Any]:
                 return self._client.send_message(
@@ -191,10 +204,10 @@ class ZulipTrioClient:
                 )
 
             res = await trio.to_thread.run_sync(_send)
-            
+
             # Log rate limit info
             self._log_rate_limit_info(res)
-            
+
             # Check for rate limiting
             if res.get("code") == "RATE_LIMIT_HIT":
                 if attempt < max_retries - 1:
@@ -206,16 +219,15 @@ class ZulipTrioClient:
                     )
                     await trio.sleep(retry_after)
                     continue
-                else:
-                    logger.error("Rate limit exceeded after %s attempts", max_retries)
-                    return None
-            
+                logger.error("Rate limit exceeded after %s attempts", max_retries)
+                return None
+
             if res.get("result") == "success":
                 return res.get("id")
-            
+
             logger.warning("Failed to send private message: %s", res)
             return None
-        
+
         return None
 
     async def send_stream_message(
@@ -223,7 +235,7 @@ class ZulipTrioClient:
     ) -> Optional[int]:
         """Send a message to a stream with rate limit handling."""
         max_retries = 3
-        
+
         for attempt in range(max_retries):
             def _send() -> Dict[str, Any]:
                 return self._client.send_message(
@@ -236,10 +248,10 @@ class ZulipTrioClient:
                 )
 
             res = await trio.to_thread.run_sync(_send)
-            
+
             # Log rate limit info
             self._log_rate_limit_info(res)
-            
+
             # Check for rate limiting
             if res.get("code") == "RATE_LIMIT_HIT":
                 if attempt < max_retries - 1:
@@ -251,16 +263,15 @@ class ZulipTrioClient:
                     )
                     await trio.sleep(retry_after)
                     continue
-                else:
-                    logger.error("Rate limit exceeded after %s attempts", max_retries)
-                    return None
-            
+                logger.error("Rate limit exceeded after %s attempts", max_retries)
+                return None
+
             if res.get("result") == "success":
                 return res.get("id")
-            
+
             logger.warning("Failed to send stream message: %s", res)
             return None
-        
+
         return None
 
     async def react_to_message(self, message_id: int, emoji_name: str) -> None:
@@ -323,15 +334,42 @@ class ZulipTrioClient:
         return res
 
     async def delete_message(self, message_id: int) -> bool:
-        """Delete a message by ID."""
+        """Delete a message by ID with rate limit handling."""
+        max_retries = 3
 
-        def _delete() -> Dict[str, Any]:
-            return self._client.delete_message(message_id)
+        for attempt in range(max_retries):
+            def _delete() -> Dict[str, Any]:
+                return self._client.delete_message(message_id)
 
-        res = await trio.to_thread.run_sync(_delete)
-        if res.get("result") == "success":
-            return True
-        logger.warning("Failed to delete message_id=%s: %s", message_id, res)
+            res = await trio.to_thread.run_sync(_delete)
+
+            # Log rate limit info
+            self._log_rate_limit_info(res)
+
+            # Check for rate limiting
+            if res.get("code") == "RATE_LIMIT_HIT":
+                if attempt < max_retries - 1:
+                    retry_after = self._get_rate_limit_reset(res)
+                    logger.warning(
+                        "Rate limit hit deleting message. "
+                        "Waiting %s seconds (attempt %s/%s)",
+                        retry_after, attempt + 1, max_retries
+                    )
+                    await trio.sleep(retry_after)
+                    continue
+                logger.error("Rate limit exceeded after %s attempts", max_retries)
+                return False
+
+            if res.get("result") == "success":
+                return True
+
+            # Log permission errors as debug, not warning (expected in many cases)
+            if res.get("code") == "BAD_REQUEST" and "permission" in res.get("msg", "").lower():
+                logger.debug("No permission to delete message_id=%s (expected for DMs)", message_id)
+            else:
+                logger.warning("Failed to delete message_id=%s: %s", message_id, res)
+            return False
+
         return False
 
     async def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:

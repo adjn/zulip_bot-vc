@@ -22,11 +22,13 @@ class PendingAnon:
     """Tracks a pending anonymous post awaiting user confirmation.
     
     Attributes:
-        original_message_id: ID of the original DM message
+        original_message_id: ID of the original DM message (cannot be deleted by bot)
         original_content: Content of the message to post anonymously
+        confirmation_message_id: ID of bot's confirmation prompt (can be deleted by bot)
     """
     original_message_id: int
     original_content: str
+    confirmation_message_id: int
 
 
 class AnonymousPostingFeature(FeatureHandler):
@@ -52,7 +54,14 @@ class AnonymousPostingFeature(FeatureHandler):
             return False
 
         # Only DM messages to the bot (type=private)
-        return event.message_type == "private"
+        if event.message_type != "private":
+            return False
+
+        # Don't handle admin commands (those start with "!")
+        if event.content.strip().startswith("!"):
+            return False
+
+        return True
 
     async def handle(self, event: MessageEvent) -> None:
         cfg = self.config_mgr.get().get("anonymous_posting", {})
@@ -78,33 +87,27 @@ class AnonymousPostingFeature(FeatureHandler):
                         message_id=anon_msg_id,
                         delete_after_minutes=delete_after_minutes,
                     )
-                # Try to delete original DM and control DMs if allowed
+                
+                # Delete the bot's confirmation prompt 
                 self.scheduler.schedule_deletion(
-                    message_id=pending.original_message_id,
-                    delete_after_minutes=1,  # soon
-                )
-                self.scheduler.schedule_deletion(
-                    message_id=event.id,
+                    message_id=pending.confirmation_message_id,
                     delete_after_minutes=1,
                 )
-                await self.client.send_private_message(
-                    event.sender_id,
-                    "Your message has been posted anonymously.",
-                )
+                
+                # The bot can only delete messages it sends
                 return
 
             if normalized == "cancel":
+                # Delete the bot's confirmation prompt 
                 self.scheduler.schedule_deletion(
-                    message_id=pending.original_message_id,
+                    message_id=pending.confirmation_message_id,
                     delete_after_minutes=1,
                 )
-                self.scheduler.schedule_deletion(
-                    message_id=event.id,
-                    delete_after_minutes=1,
-                )
+                
+                # Send brief confirmation
                 await self.client.send_private_message(
                     event.sender_id,
-                    "Okay, your message was not posted.",
+                    "Cancelled.",
                 )
                 return
 
@@ -116,17 +119,11 @@ class AnonymousPostingFeature(FeatureHandler):
             return
 
         # New DM -> start confirmation flow
-        # Save pending confirmation (in memory only, ephemeral)
-        self._pending[event.sender_id] = PendingAnon(
-            original_message_id=event.id,
-            original_content=event.content,
-        )
-
         preview = event.content.strip()
         if len(preview) > 500:
             preview = preview[:500] + " ..."
 
-        await self.client.send_private_message(
+        confirmation_msg_id = await self.client.send_private_message(
             event.sender_id,
             (
                 "You wrote:\n\n"
@@ -134,3 +131,12 @@ class AnonymousPostingFeature(FeatureHandler):
                 "Reply with `SEND` to post anonymously, or `CANCEL` to discard."
             ),
         )
+
+        # Save pending confirmation (in memory only, ephemeral)
+        # Store the confirmation message ID so we can delete it later
+        if confirmation_msg_id is not None:
+            self._pending[event.sender_id] = PendingAnon(
+                original_message_id=event.id,
+                original_content=event.content,
+                confirmation_message_id=confirmation_msg_id,
+            )
