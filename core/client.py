@@ -1,3 +1,4 @@
+"""Trio-friendly wrapper for the Zulip API client."""
 import json
 import logging
 import os
@@ -20,6 +21,7 @@ class ZulipTrioClient:
 
     @classmethod
     def from_env_or_rc(cls) -> "ZulipTrioClient":
+        """Create a ZulipTrioClient from environment variables or ~/.zuliprc."""
         config_file = os.environ.get("ZULIP_CONFIG_FILE")  # optional override
         if config_file:
             client = zulip.Client(config_file=config_file)
@@ -62,6 +64,8 @@ class ZulipTrioClient:
                 yield event
 
     async def send_private_message(self, to_user_id: int, content: str) -> Optional[int]:
+        """Send a private message to a user."""
+
         def _send() -> Dict[str, Any]:
             return self._client.send_message(
                 {
@@ -80,6 +84,8 @@ class ZulipTrioClient:
     async def send_stream_message(
         self, stream: str, topic: str, content: str
     ) -> Optional[int]:
+        """Send a message to a stream."""
+
         def _send() -> Dict[str, Any]:
             return self._client.send_message(
                 {
@@ -97,6 +103,8 @@ class ZulipTrioClient:
         return None
 
     async def react_to_message(self, message_id: int, emoji_name: str) -> None:
+        """Add an emoji reaction to a message."""
+
         def _react() -> Dict[str, Any]:
             return self._client.add_reaction(
                 {
@@ -154,6 +162,8 @@ class ZulipTrioClient:
         return res
 
     async def delete_message(self, message_id: int) -> bool:
+        """Delete a message by ID."""
+
         def _delete() -> Dict[str, Any]:
             return self._client.delete_message(message_id)
 
@@ -164,6 +174,8 @@ class ZulipTrioClient:
         return False
 
     async def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Get user information by user ID."""
+
         def _get() -> Dict[str, Any]:
             return self._client.get_user_by_id(user_id)
 
@@ -174,6 +186,8 @@ class ZulipTrioClient:
         return res.get("user")
 
     async def get_own_user(self) -> Optional[Dict[str, Any]]:
+        """Get the bot's own user profile."""
+
         def _get() -> Dict[str, Any]:
             return self._client.get_profile()
 
@@ -184,6 +198,8 @@ class ZulipTrioClient:
         return res
 
     async def list_users(self) -> List[Dict[str, Any]]:
+        """List all users in the Zulip organization."""
+
         def _get() -> Dict[str, Any]:
             return self._client.get_users()
 

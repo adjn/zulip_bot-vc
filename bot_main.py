@@ -34,11 +34,10 @@ async def main() -> None:
     # Load config
     config_path = os.environ.get("ZULIP_BOT_VC_CONFIG", "config.yaml")
     config_mgr = ConfigManager(config_path)
-    config = config_mgr.load()
+    config_mgr.load()
 
     # Create Zulip client (trio wrapper)
     client = ZulipTrioClient.from_env_or_rc()
-    
     # Log bot identity
     bot_user = await client.get_own_user()
     if bot_user:
