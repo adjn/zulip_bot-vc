@@ -38,6 +38,18 @@ async def main() -> None:
 
     # Create Zulip client (trio wrapper)
     client = ZulipTrioClient.from_env_or_rc()
+    
+    # Log bot identity
+    bot_user = await client.get_own_user()
+    if bot_user:
+        logger.info(
+            "Bot authenticated as: %s (email: %s, user_id: %s)",
+            bot_user.get("full_name"),
+            bot_user.get("email"),
+            bot_user.get("user_id"),
+        )
+    else:
+        logger.warning("Could not retrieve bot user information")
 
     # Scheduler for message deletions
     scheduler = DeletionScheduler(client=client)
@@ -78,8 +90,10 @@ async def main() -> None:
                 apply_markdown=False,
             )
             logger.info("Registered event queue id=%s", queue.get("queue_id"))
+            logger.info("Bot is now listening for messages...")
 
             async for event in client.events(queue):
+                logger.debug("Received event: type=%s", event.get("type"))
                 await dispatcher.dispatch_event(event)
 
         nursery.start_soon(event_loop)
