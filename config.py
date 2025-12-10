@@ -1,3 +1,8 @@
+"""Configuration management for the Zulip bot.
+
+Provides a ConfigManager class that handles loading, updating, and persisting
+bot configuration from YAML files with sensible defaults.
+"""
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict
@@ -41,6 +46,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
 @dataclass
 class ConfigManager:
+    """Manages bot configuration with YAML file persistence.
+    
+    Attributes:
+        path: Path to the YAML configuration file
+    """
     path: str
     _store: YAMLFileStore = field(init=False)
     _config: Dict[str, Any] = field(init=False, default_factory=dict)
@@ -49,6 +59,7 @@ class ConfigManager:
         self._store = YAMLFileStore(self.path)
 
     def load(self) -> Dict[str, Any]:
+        """Load configuration from file, creating defaults if needed."""
         if not self._store.exists():
             logger.info("Config file %s not found, creating default config", self.path)
             self._store.write(DEFAULT_CONFIG)
@@ -70,9 +81,15 @@ class ConfigManager:
         return self._config
 
     def get(self) -> Dict[str, Any]:
+        """Get the current configuration dictionary."""
         return self._config
 
     def update(self, new_config: Dict[str, Any]) -> None:
+        """Update and persist the configuration.
+        
+        Args:
+            new_config: New configuration dictionary to save
+        """
         # Replace config entirely with validated dict from caller
         self._config = new_config
         self._store.write(self._config)

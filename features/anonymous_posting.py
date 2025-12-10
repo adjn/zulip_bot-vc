@@ -1,3 +1,9 @@
+"""Anonymous posting feature for the Zulip bot.
+
+Allows users to send anonymous messages via DM with a confirmation workflow.
+Messages are posted to a configured stream/topic and optionally deleted after
+a specified time period.
+"""
 import logging
 from dataclasses import dataclass
 from typing import Dict
@@ -13,6 +19,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PendingAnon:
+    """Tracks a pending anonymous post awaiting user confirmation.
+    
+    Attributes:
+        original_message_id: ID of the original DM message
+        original_content: Content of the message to post anonymously
+    """
     original_message_id: int
     original_content: str
 

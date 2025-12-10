@@ -1,3 +1,8 @@
+"""Admin controls feature for the Zulip bot.
+
+Provides administrative commands for bot operators to view and modify
+configuration through direct messages. Only available to Zulip admins/owners.
+"""
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List
@@ -54,6 +59,13 @@ class AdminControlsFeature(FeatureHandler):
             )
 
     async def _handle_config(self, cmd: str, body: str, event: MessageEvent) -> None:
+        """Handle !config admin commands.
+        
+        Args:
+            cmd: Command line (e.g., '!config show')
+            body: Additional body text if any
+            event: Message event from admin
+        """
         # For now only "show"
         parts = cmd.split()
         if len(parts) == 2 and parts[1] == "show":

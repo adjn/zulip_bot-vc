@@ -1,3 +1,8 @@
+"""Message deletion scheduling utilities.
+
+Provides a DeletionScheduler class that manages scheduled deletion of Zulip
+messages after configurable time periods.
+"""
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -12,6 +17,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ScheduledDeletion:
+    """Represents a scheduled message deletion.
+    
+    Attributes:
+        message_id: ID of the message to delete
+        delete_at: When to delete the message
+    """
     message_id: int
     delete_at: datetime
 
@@ -29,6 +40,12 @@ class DeletionScheduler:
         self._lock = trio.Lock()
 
     def schedule_deletion(self, message_id: int, delete_after_minutes: int) -> None:
+        """Schedule a message for deletion.
+        
+        Args:
+            message_id: ID of the message to delete
+            delete_after_minutes: How many minutes to wait before deletion
+        """
         delete_at = datetime.now(timezone.utc) + timedelta(minutes=delete_after_minutes)
         logger.info(
             "Scheduling deletion of message_id=%s at %s",
@@ -41,6 +58,10 @@ class DeletionScheduler:
         )
 
     async def run(self) -> None:
+        """Main scheduler loop that processes pending deletions.
+        
+        Runs continuously, checking every minute for messages to delete.
+        """
         while True:
             try:
                 await self._run_once()
@@ -49,6 +70,7 @@ class DeletionScheduler:
             await trio.sleep(60)
 
     async def _run_once(self) -> None:
+        """Process one cycle of scheduled deletions."""
         now = datetime.now(timezone.utc)
         to_delete = []
         async with self._lock:

@@ -1,3 +1,8 @@
+"""Private access control feature for the Zulip bot.
+
+Watches specific stream/topic combinations for trigger phrases and automatically
+subscribes users to target streams when they post the correct phrase.
+"""
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List
@@ -13,6 +18,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class WatchRule:
+    """Configuration for a private access watch rule.
+    
+    Attributes:
+        stream: Stream to monitor
+        topic: Topic to monitor
+        phrase: Trigger phrase to watch for
+        target_stream: Stream to subscribe users to when phrase is matched
+    """
     stream: str
     topic: str
     phrase: str
@@ -34,6 +47,11 @@ class PrivateAccessFeature(FeatureHandler):
         self.config_mgr = config_mgr
 
     def _load_rules(self) -> List[WatchRule]:
+        """Load watch rules from configuration.
+        
+        Returns:
+            List of WatchRule objects parsed from config
+        """
         cfg = self.config_mgr.get().get("private_access", {})
         if not cfg.get("enabled", False):
             return []

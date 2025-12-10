@@ -1,3 +1,8 @@
+"""Event dispatching system for routing Zulip messages to feature handlers.
+
+Provides a dispatcher pattern that routes message events to registered
+feature handlers based on their handling criteria.
+"""
 import logging
 from typing import List
 
@@ -23,9 +28,22 @@ class Dispatcher:
         self._features: List[FeatureHandler] = []
 
     def register_feature(self, feature: FeatureHandler) -> None:
+        """Register a feature handler with the dispatcher.
+        
+        Args:
+            feature: FeatureHandler instance to register
+        """
         self._features.append(feature)
 
     async def dispatch_event(self, event_dict: dict) -> None:
+        """Dispatch an event to all registered features.
+        
+        Parses the event and routes it to features that can handle it.
+        Errors in individual features are logged but don't stop processing.
+        
+        Args:
+            event_dict: Raw event dictionary from Zulip
+        """
         msg_event = parse_message_event(event_dict)
         if msg_event is None:
             return

@@ -1,3 +1,10 @@
+"""Main entry point for the Zulip bot with modular features.
+
+This module initializes and runs the Zulip bot with support for:
+- Anonymous posting
+- Private access control
+- Admin controls
+"""
 import logging
 import os
 
