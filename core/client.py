@@ -90,10 +90,11 @@ class ZulipTrioClient:
                 if res.get("code") == "RATE_LIMIT_HIT":
                     retry_after = self._get_rate_limit_reset(res)
                     logger.warning(
-                        "Rate limit hit. Waiting %s seconds before retry. "
-                        "Message: %s",
+                        "Rate limit hit in events loop. Waiting %.1f seconds. "
+                        "API message: %s | Full response: %s",
                         retry_after,
-                        res.get("msg", "No message")
+                        res.get("msg", "No message"),
+                        json.dumps(res)
                     )
                     await trio.sleep(retry_after)
                     continue
@@ -148,7 +149,15 @@ class ZulipTrioClient:
                 logger.warning("Invalid X-RateLimit-Reset value: %s", reset_time)
 
         # Default fallback: wait 60 seconds if header not present
-        logger.warning("X-RateLimit-Reset header not found, using default 60s")
+        # Log full response to debug why header is missing
+        logger.warning(
+            "X-RateLimit-Reset header not found, using default 60s. "
+            "Response: result=%s, msg=%s, code=%s, keys=%s",
+            response.get("result"),
+            response.get("msg"),
+            response.get("code"),
+            list(response.keys())
+        )
         return 60.0
 
     def _log_rate_limit_info(self, response: Dict[str, Any]) -> None:
@@ -214,12 +223,18 @@ class ZulipTrioClient:
                     retry_after = self._get_rate_limit_reset(res)
                     logger.warning(
                         "Rate limit hit sending private message. "
-                        "Waiting %s seconds (attempt %s/%s)",
-                        retry_after, attempt + 1, max_retries
+                        "Waiting %.1f seconds (attempt %s/%s). "
+                        "API message: %s | Response keys: %s",
+                        retry_after, attempt + 1, max_retries,
+                        res.get("msg", "No message"),
+                        list(res.keys())
                     )
                     await trio.sleep(retry_after)
                     continue
-                logger.error("Rate limit exceeded after %s attempts", max_retries)
+                logger.error(
+                    "Rate limit exceeded after %s attempts. API message: %s",
+                    max_retries, res.get("msg", "No message")
+                )
                 return None
 
             if res.get("result") == "success":
@@ -258,12 +273,18 @@ class ZulipTrioClient:
                     retry_after = self._get_rate_limit_reset(res)
                     logger.warning(
                         "Rate limit hit sending stream message. "
-                        "Waiting %s seconds (attempt %s/%s)",
-                        retry_after, attempt + 1, max_retries
+                        "Waiting %.1f seconds (attempt %s/%s). "
+                        "API message: %s | Response keys: %s",
+                        retry_after, attempt + 1, max_retries,
+                        res.get("msg", "No message"),
+                        list(res.keys())
                     )
                     await trio.sleep(retry_after)
                     continue
-                logger.error("Rate limit exceeded after %s attempts", max_retries)
+                logger.error(
+                    "Rate limit exceeded after %s attempts. API message: %s",
+                    max_retries, res.get("msg", "No message")
+                )
                 return None
 
             if res.get("result") == "success":
@@ -352,12 +373,18 @@ class ZulipTrioClient:
                     retry_after = self._get_rate_limit_reset(res)
                     logger.warning(
                         "Rate limit hit deleting message. "
-                        "Waiting %s seconds (attempt %s/%s)",
-                        retry_after, attempt + 1, max_retries
+                        "Waiting %.1f seconds (attempt %s/%s). "
+                        "API message: %s | Response keys: %s",
+                        retry_after, attempt + 1, max_retries,
+                        res.get("msg", "No message"),
+                        list(res.keys())
                     )
                     await trio.sleep(retry_after)
                     continue
-                logger.error("Rate limit exceeded after %s attempts", max_retries)
+                logger.error(
+                    "Rate limit exceeded after %s attempts. API message: %s",
+                    max_retries, res.get("msg", "No message")
+                )
                 return False
 
             if res.get("result") == "success":
