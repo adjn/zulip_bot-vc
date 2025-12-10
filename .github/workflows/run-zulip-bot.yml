@@ -1,0 +1,46 @@
+name: Run Zulip Bot
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    env:
+      # This secret should contain the full text of your .zuliprc file
+      ZULIP_RC_CONTENT: ${{ secrets.ZULIP_RC }}
+      # Optional: if you want to provide config.yaml via a secret instead of committing it
+      ZULIP_BOT_CONFIG_CONTENT: ${{ secrets.ZULIP_BOT_CONFIG }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Write Zulip config from secret
+        if: env.ZULIP_RC_CONTENT != ''
+        run: |
+          echo "Writing .zuliprc from ZULIP_RC_CONTENT"
+          printf '%s\n' "$ZULIP_RC_CONTENT" > .zuliprc
+          echo "ZULIP_CONFIG_FILE=$(pwd)/.zuliprc" >> "$GITHUB_ENV"
+
+      - name: Write bot YAML config from secret (optional)
+        if: env.ZULIP_BOT_CONFIG_CONTENT != ''
+        run: |
+          echo "Writing config.yaml from ZULIP_BOT_CONFIG_CONTENT"
+          printf '%s\n' "$ZULIP_BOT_CONFIG_CONTENT" > config.yaml
+          echo "ZULIP_BOT_VC_CONFIG=$(pwd)/config.yaml" >> "$GITHUB_ENV"
+
+      - name: Run Zulip bot
+        run: |
+          python bot_main.py
