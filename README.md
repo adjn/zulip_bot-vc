@@ -11,7 +11,7 @@ By default, **all feature modules are disabled**. You must explicitly enable the
 
 ---
 
-## Installation
+## Installation (I haven't reviewed if any of this is correct, do not follow)
 
 1. **Clone or copy the project** to a machine that can reach your Zulip server (e.g., EC2, or for testing, GitHub Actions).
 
@@ -34,7 +34,7 @@ By default, **all feature modules are disabled**. You must explicitly enable the
 4. (Optional) Set config path via env:
 
    ```bash
-   export ZULIP_BOT_VC_CONFIG=/path/to/config.yaml
+   export ZULIP_BOT_CONFIG=/path/to/config.yaml
    ```
 
    If not set, `config.yaml` in the current directory will be used/created.
