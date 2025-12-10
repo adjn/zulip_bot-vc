@@ -31,6 +31,7 @@ class ZulipTrioClient:
         return cls(client)
 
     async def register(self, **kwargs: Any) -> Dict[str, Any]:
+        """Register an event queue with the Zulip server."""
         def _register() -> Dict[str, Any]:
             return self._client.register(**kwargs)
 
