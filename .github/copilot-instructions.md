@@ -5,6 +5,7 @@ This is a Zulip bot with modular features including anonymous posting, private a
 
 ## Code Style Guidelines
 - Follow PEP 8 style guidelines for Python code
+- Include comments and docstrings for all functions and classes
 - Use type hints for function parameters and return values
 - Use async/await patterns with trio for asynchronous operations
 - Keep functions focused and modular
