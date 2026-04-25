@@ -10,14 +10,16 @@ A modular Zulip bot in Python (3.12+) using the official `zulip` SDK and
 `trio`. Three features today:
 
 - `features/anonymous_posting.py` — DM → confirmation → relay to a stream,
-  with an in-memory schedule to delete the relayed message later.
+  with a persistent schedule (SQLite) to delete the relayed message later.
 - `features/private_access.py` — watch `(stream, topic)` for an exact phrase,
   auto-subscribe the sender to a target stream and react.
 - `features/admin_controls.py` — DM-only `!`-prefixed admin commands.
 
 `bot_main.py` is the entry point. `core/` is the dispatch + Zulip client
-wrapper. `storage/` and `utils/` are small helpers. `tests/` uses `pytest` +
-`pytest-trio` with an in-memory fake client.
+wrapper. `storage/` holds the SQLite-backed `Storage` (`storage/db.py`)
+and the YAML config store (`storage/file_store.py`). `utils/` is a thin
+helper layer. `tests/` uses `pytest` + `pytest-trio` with a fake client
+and an in-memory SQLite database.
 
 ## Hard rules — do not violate
 
@@ -38,9 +40,12 @@ wrapper. `storage/` and `utils/` are small helpers. `tests/` uses `pytest` +
 6. **Admin commands** are gated on `is_admin || is_owner` *and* (for super-
    admin operations) an explicit allowlist in config. Cache the role lookup
    with a TTL — do not round-trip `get_user_by_id` per command.
-7. **Persistence note:** scheduled deletions and pending confirmations are in
-   memory only today. Anything you add that promises durability needs a real
-   store. Don't add new "promised durable" features without one.
+7. **Durable user-visible state lives in `Storage`.** Anything that
+   embodies a privacy or rate-limit promise (scheduled deletions,
+   pending confirmations, cooldowns) must round-trip through
+   `storage/db.py`, not a process-local dict. The bot fails closed at
+   startup if the DB path isn't writable — don't paper over that with
+   an in-memory fallback.
 8. **No secrets in code, in logs, or in the repo working directory.** The
    workflow writes `.zuliprc` to `$RUNNER_TEMP`, not the checkout.
 
@@ -57,6 +62,22 @@ wrapper. `storage/` and `utils/` are small helpers. `tests/` uses `pytest` +
 - Config is read via `ConfigManager.get()`. Mutating config goes through
   `ConfigManager.update(new_cfg)` which deep-merges, schema-checks, and
   atomically writes.
+
+## Storage
+
+- Durable state lives in a single SQLite file (`./data/bot.db` by
+  default; override with `BOT_DB_PATH` or `storage.db_path`).
+- `storage/db.py` exposes a `Storage` class. All public methods are
+  `async` and dispatch SQLite work to a worker thread via
+  `trio.to_thread.run_sync`, serialised by an internal `trio.Lock`.
+- WAL mode is on; timestamps are stored as ISO-8601 UTC text.
+- Schema migrations live in `_apply_migrations()` and are idempotent;
+  bump `SCHEMA_VERSION` and add a numbered block when changing schema.
+  The bot refuses to start if the on-disk version is newer than the
+  code's `SCHEMA_VERSION`.
+- Tests use `:memory:` (or `tmp_path` for restart-survival tests). Don't
+  introduce a separate `FakeStorage` — the real implementation is fast
+  and tests against real SQL behaviour.
 
 ## Code style
 

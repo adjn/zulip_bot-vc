@@ -295,11 +295,20 @@ The body after the first line is parsed as YAML.
   posted/confirmation message IDs and a sanitized event id are recorded.
 - **Private access**: `sender_id` is included in subscription logs by default.
   Set `logging.anonymize_user_ids: true` to redact it.
-- **Persistence caveat**: pending confirmations and scheduled deletions live in
-  process memory only. Bot restart loses them; the privacy contract of
-  auto-deleting anonymous posts therefore depends on the bot staying up. A
-  durable replacement (SQLite-backed scheduler + pending state) is tracked as
-  a long-term improvement.
+- **Durable state**: scheduled deletions, pending confirmations, and per-sender
+  cooldowns are persisted to a local SQLite database (`./data/bot.db` by
+  default). The auto-delete privacy contract therefore survives a bot restart.
+  Override the path with `BOT_DB_PATH` or in `config.yaml`:
+
+  ```yaml
+  storage:
+    db_path: /var/lib/zulip-bot/bot.db
+  ```
+
+  The bot fails closed if this path isn't writable rather than silently
+  reverting to ephemeral mode. Make sure the deploy target gives the process
+  a persistent filesystem (Fly volume, Railway volume, VPS disk, home
+  server, etc.). Ephemeral PaaS dynos are not supported.
 
 ---
 

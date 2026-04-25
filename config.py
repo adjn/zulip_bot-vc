@@ -52,6 +52,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "level": "INFO",
         "anonymize_user_ids": False,
     },
+    "storage": {
+        # Path to the SQLite database file. Override at runtime via
+        # the BOT_DB_PATH env var (handy for tests and ephemeral hosts).
+        "db_path": "./data/bot.db",
+    },
 }
 
 

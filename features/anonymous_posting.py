@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -29,6 +29,7 @@ from config import ConfigManager
 from core.client import ClientProtocol
 from core.dispatcher import FeatureHandler
 from core.models import MessageEvent
+from storage.db import Storage
 from utils.scheduling import DeletionScheduler
 
 logger = logging.getLogger(__name__)
@@ -83,23 +84,18 @@ def _now_utc() -> datetime:
 
 
 @dataclass
-class PendingAnon:
-    """A pending anonymous post awaiting user confirmation."""
-
-    original_content: str
-    confirmation_message_id: int | None
-    expires_at: datetime
-
-
-@dataclass
 class AnonymousPostingFeature(FeatureHandler):
-    """Handles anonymous posting via DM."""
+    """Handles anonymous posting via DM.
+
+    Pending confirmations and per-sender cooldowns live in
+    :class:`Storage` so they survive a bot restart -- the auto-delete
+    privacy contract depends on it.
+    """
 
     client: ClientProtocol
     config_mgr: ConfigManager
     scheduler: DeletionScheduler
-    _pending: dict[int, PendingAnon] = field(default_factory=dict, repr=False)
-    _last_post_at: dict[int, datetime] = field(default_factory=dict, repr=False)
+    storage: Storage
 
     # ---------------------------------------------------------------- guards
 
@@ -118,15 +114,16 @@ class AnonymousPostingFeature(FeatureHandler):
     # ---------------------------------------------------------------- handler
 
     async def handle(self, event: MessageEvent) -> None:
-        # The flow has two phases driven by `_pending` membership:
-        #   1. New flow: this user has no pending submission. We treat the
-        #      DM as their proposed anonymous content, send a confirmation
-        #      prompt back, and record it in `_pending`.
-        #   2. Confirmation: the user already has a pending submission.
-        #      Their next DM must be SEND (relay it), CANCEL (drop it), or
-        #      anything else (clear pending and ask them to restart).
-        # The TTL eviction below means an abandoned prompt won't trap the
-        # user's *next* unrelated DM as accidental SEND/CANCEL input.
+        # The flow has two phases driven by whether this sender has a
+        # pending row in the DB:
+        #   1. New flow: no pending row. We treat the DM as their
+        #      proposed anonymous content, send a confirmation prompt,
+        #      and upsert a pending row.
+        #   2. Confirmation: a non-expired pending row exists. The next
+        #      DM must be SEND (relay it), CANCEL (drop it), or anything
+        #      else (drop the pending row and ask them to restart).
+        # `fetch_pending` evicts expired rows itself, so an abandoned
+        # prompt can't trap the user's *next* unrelated DM.
         cfg = self._cfg()
         target_stream: str = cfg.get("target_stream", "anonymous")
         target_topic: str = cfg.get("target_topic", "general")
@@ -137,15 +134,20 @@ class AnonymousPostingFeature(FeatureHandler):
         pending_ttl: int = int(cfg.get("pending_ttl_minutes", 10))
 
         normalized = event.content.strip().lower()
-        self._evict_expired_pending()
+        now = _now_utc()
+        pending = await self.storage.fetch_pending(event.sender_id, now=now)
 
         # --- confirmation step ---------------------------------------
-        if event.sender_id in self._pending:
-            pending = self._pending.pop(event.sender_id)
+        if pending is not None:
+            popped = await self.storage.pop_pending(event.sender_id)
+            # popped is logically the same row we just fetched; we use
+            # pop_pending to delete it atomically rather than racing.
+            original_content, confirmation_message_id = popped or pending
 
             if normalized == "send":
                 await self._post_anonymously(
-                    pending=pending,
+                    original_content=original_content,
+                    confirmation_message_id=confirmation_message_id,
                     sender_id=event.sender_id,
                     target_stream=target_stream,
                     target_topic=target_topic,
@@ -156,9 +158,9 @@ class AnonymousPostingFeature(FeatureHandler):
                 return
 
             if normalized == "cancel":
-                if pending.confirmation_message_id is not None:
+                if confirmation_message_id is not None:
                     await self.scheduler.schedule_deletion(
-                        message_id=pending.confirmation_message_id,
+                        message_id=confirmation_message_id,
                         delete_after_minutes=1,
                     )
                 await self.client.send_private_message(event.sender_id, "Cancelled.")
@@ -172,9 +174,9 @@ class AnonymousPostingFeature(FeatureHandler):
 
         # --- new flow -------------------------------------------------
         # Per-sender cooldown
-        last = self._last_post_at.get(event.sender_id)
+        last = await self.storage.fetch_cooldown(event.sender_id)
         if last is not None:
-            elapsed = (_now_utc() - last).total_seconds()
+            elapsed = (now - last).total_seconds()
             if elapsed < cooldown:
                 wait = int(cooldown - elapsed) + 1
                 await self.client.send_private_message(
@@ -205,10 +207,11 @@ class AnonymousPostingFeature(FeatureHandler):
             ),
         )
 
-        self._pending[event.sender_id] = PendingAnon(
+        await self.storage.upsert_pending(
+            sender_id=event.sender_id,
             original_content=original,
             confirmation_message_id=confirmation_msg_id,
-            expires_at=_now_utc() + timedelta(minutes=pending_ttl),
+            expires_at=now + timedelta(minutes=pending_ttl),
         )
 
     # ---------------------------------------------------------------- helpers
@@ -216,7 +219,8 @@ class AnonymousPostingFeature(FeatureHandler):
     async def _post_anonymously(
         self,
         *,
-        pending: PendingAnon,
+        original_content: str,
+        confirmation_message_id: int | None,
         sender_id: int,
         target_stream: str,
         target_topic: str,
@@ -224,7 +228,7 @@ class AnonymousPostingFeature(FeatureHandler):
         max_len: int,
         scrub: bool,
     ) -> None:
-        body = pending.original_content
+        body = original_content
         if len(body) > max_len:
             body = body[:max_len]
         if scrub:
@@ -237,16 +241,10 @@ class AnonymousPostingFeature(FeatureHandler):
                 message_id=anon_msg_id,
                 delete_after_minutes=delete_after_minutes,
             )
-            self._last_post_at[sender_id] = _now_utc()
+            await self.storage.upsert_cooldown(sender_id, _now_utc())
 
-        if pending.confirmation_message_id is not None:
+        if confirmation_message_id is not None:
             await self.scheduler.schedule_deletion(
-                message_id=pending.confirmation_message_id,
+                message_id=confirmation_message_id,
                 delete_after_minutes=1,
             )
-
-    def _evict_expired_pending(self) -> None:
-        now = _now_utc()
-        stale = [uid for uid, p in self._pending.items() if p.expires_at <= now]
-        for uid in stale:
-            self._pending.pop(uid, None)
