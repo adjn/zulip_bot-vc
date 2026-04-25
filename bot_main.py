@@ -1,101 +1,117 @@
-"""Main entry point for the Zulip bot with modular features.
+"""Main entry point for the Zulip bot."""
 
-This module initializes and runs the Zulip bot with support for:
-- Anonymous posting
-- Private access control
-- Admin controls
-"""
+from __future__ import annotations
+
 import logging
 import os
+from typing import Any
 
 import trio
 
 from config import ConfigManager
-from core.client import ZulipTrioClient
+from core.client import QueueInvalidated, ZulipTrioClient
 from core.dispatcher import Dispatcher
+from features.admin_controls import AdminControlsFeature
 from features.anonymous_posting import AnonymousPostingFeature
 from features.private_access import PrivateAccessFeature
-from features.admin_controls import AdminControlsFeature
 from utils.scheduling import DeletionScheduler
-
 
 logger = logging.getLogger(__name__)
 
 
-async def main() -> None:
-    """Initialize and run the Zulip bot with all configured features."""
-    # Basic logging setup
+def _configure_logging(config_mgr: ConfigManager) -> None:
+    level_name = config_mgr.get().get("logging", {}).get("level", "INFO") or "INFO"
+    level = getattr(logging, level_name.upper(), logging.INFO)
     logging.basicConfig(
-        level=logging.INFO,
+        level=level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-    logger.info("Starting zulip_bot-vc")
 
-    # Load config
+
+async def _event_loop(client: ZulipTrioClient, dispatcher: Dispatcher) -> None:
+    """Register an event queue and dispatch events forever.
+
+    On `BAD_EVENT_QUEUE_ID` the queue is re-registered automatically.
+    """
+    while True:
+        queue: dict[str, Any] = await client.register(
+            event_types=["message"],
+            client_gravatar=False,
+            apply_markdown=False,
+        )
+        logger.info(
+            "Registered event queue id=%s last_event_id=%s",
+            queue.get("queue_id"),
+            queue.get("last_event_id"),
+        )
+        try:
+            async for event in client.events(queue):
+                await dispatcher.dispatch_event(event)
+        except QueueInvalidated:
+            logger.info("Re-registering event queue after invalidation")
+            continue
+
+
+async def main() -> None:
+    """Initialize and run the Zulip bot."""
+    # --- 1. Config + logging ---------------------------------------------
+    # Load YAML config first so we can honour `logging.level` from the file
+    # before anything else logs. ZULIP_BOT_VC_CONFIG lets ops point at a
+    # config outside the working directory (e.g. mounted secret).
     config_path = os.environ.get("ZULIP_BOT_VC_CONFIG", "config.yaml")
     config_mgr = ConfigManager(config_path)
     config_mgr.load()
+    _configure_logging(config_mgr)
+    logger.info("Starting zulip_bot-vc")
 
-    # Create Zulip client (trio wrapper)
+    # --- 2. Zulip client + identity --------------------------------------
+    # Reads ~/.zuliprc or $ZULIP_CONFIG_FILE. We immediately fetch our own
+    # profile so the dispatcher can drop events authored by us (otherwise
+    # the bot can react to its own DMs and feedback-loop).
     client = ZulipTrioClient.from_env_or_rc()
-    # Log bot identity
+
     bot_user = await client.get_own_user()
-    if bot_user:
-        logger.info(
-            "Bot authenticated as: %s (email: %s, user_id: %s)",
-            bot_user.get("full_name"),
-            bot_user.get("email"),
-            bot_user.get("user_id"),
+    if not bot_user:
+        # Fail closed: without our identity we cannot self-filter, which
+        # could cause feedback loops in feature handlers.
+        raise RuntimeError(
+            "Could not retrieve bot profile; refusing to start. "
+            "Check that the bot's API key has profile-read access."
         )
-    else:
-        logger.warning("Could not retrieve bot user information")
+    bot_user_id = bot_user.get("user_id")
+    logger.info(
+        "Bot authenticated as: %s (email=%s, user_id=%s)",
+        bot_user.get("full_name"),
+        bot_user.get("email"),
+        bot_user_id,
+    )
 
-    # Scheduler for message deletions
-    scheduler = DeletionScheduler(client=client)
+    # --- 3. Wire features ------------------------------------------------
+    # The scheduler is a callable consumer of `client.delete_message`; it
+    # doesn't import the client class, which keeps it unit-testable with a
+    # plain async function in tests/.
+    scheduler = DeletionScheduler(delete_fn=client.delete_message)
+    dispatcher = Dispatcher(bot_user_id=bot_user_id if isinstance(bot_user_id, int) else None)
 
-    # Dispatcher and features
-    dispatcher = Dispatcher()
-
-    # Features
+    admin_feature = AdminControlsFeature(client=client, config_mgr=config_mgr, scheduler=scheduler)
     anon_feature = AnonymousPostingFeature(
-        client=client,
-        config_mgr=config_mgr,
-        scheduler=scheduler,
+        client=client, config_mgr=config_mgr, scheduler=scheduler
     )
-    access_feature = PrivateAccessFeature(
-        client=client,
-        config_mgr=config_mgr,
-    )
-    admin_feature = AdminControlsFeature(
-        client=client,
-        config_mgr=config_mgr,
-        scheduler=scheduler,
-    )
-
-    features = [admin_feature, anon_feature, access_feature]  # admin first
-    for f in features:
+    access_feature = PrivateAccessFeature(client=client, config_mgr=config_mgr)
+    # Order matters: dispatcher walks features in registration order and
+    # short-circuits on the first `handles()` that returns True. Admin must
+    # be first so `!`-prefixed DMs are routed to admin commands before
+    # anonymous posting tries to interpret them as content.
+    for f in (admin_feature, anon_feature, access_feature):
         dispatcher.register_feature(f)
 
+    # --- 4. Run the two long-lived tasks under one nursery ---------------
+    # If either task crashes, trio cancels the other and propagates the
+    # exception out of `trio.run` — i.e. we exit the process rather than
+    # silently keep one half alive.
     async with trio.open_nursery() as nursery:
-        # Start scheduler loop
         nursery.start_soon(scheduler.run)
-
-        # Start event loop
-        async def event_loop() -> None:
-            # Register an event queue for message events
-            queue = await client.register(
-                event_types=["message"],
-                client_gravatar=False,
-                apply_markdown=False,
-            )
-            logger.info("Registered event queue id=%s", queue.get("queue_id"))
-            logger.info("Bot is now listening for messages...")
-
-            async for event in client.events(queue):
-                logger.debug("Received event: type=%s", event.get("type"))
-                await dispatcher.dispatch_event(event)
-
-        nursery.start_soon(event_loop)
+        nursery.start_soon(_event_loop, client, dispatcher)
 
 
 if __name__ == "__main__":

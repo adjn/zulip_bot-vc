@@ -1,14 +1,8 @@
-"""Text matching utilities for comparing phrases.
+"""Text matching utilities."""
 
-Provides normalization functions for case-insensitive and whitespace-tolerant
-string comparisons.
-"""
+from __future__ import annotations
 
 
 def normalize_phrase(s: str) -> str:
-    """
-    Normalize a phrase for strict-but-whitespace/case-insensitive matching.
-    - strip leading/trailing whitespace
-    - lower-case
-    """
+    """Normalize a phrase for whitespace/case-insensitive equality matching."""
     return s.strip().lower()

@@ -1,11 +1,10 @@
-"""File-based storage utilities for persisting bot data.
+"""File-based storage utilities for persisting bot data."""
 
-Provides a YAMLFileStore class for reading and writing YAML configuration files
-with atomic write operations.
-"""
+from __future__ import annotations
+
 import logging
 import os
-from typing import Any, Dict
+from typing import Any
 
 import yaml
 
@@ -13,43 +12,29 @@ logger = logging.getLogger(__name__)
 
 
 class YAMLFileStore:
-    """Handles reading and writing YAML files with atomic operations.
-    
-    Attributes:
-        path: Path to the YAML file
-    """
+    """Reads / writes a YAML file with atomic writes (tmp + rename)."""
+
     def __init__(self, path: str) -> None:
         self.path = path
 
     def exists(self) -> bool:
-        """Check if the YAML file exists."""
         return os.path.exists(self.path)
 
-    def read(self) -> Dict[str, Any]:
-        """Read and parse the YAML file.
-        
-        Returns:
-            Parsed YAML data as dictionary, or empty dict on error
-        """
+    def read(self) -> dict[str, Any]:
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
+            with open(self.path, encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            return data if isinstance(data, dict) else {}
         except FileNotFoundError:
             return {}
-        except Exception:  # pylint: disable=broad-exception-caught
-            # Intentionally catch all exceptions to prevent YAML parsing errors
-            # from crashing the bot
+        except yaml.YAMLError:
+            logger.exception("Failed to parse YAML file %s", self.path)
+            return {}
+        except OSError:
             logger.exception("Failed to read YAML file %s", self.path)
             return {}
 
-    def write(self, data: Dict[str, Any]) -> None:
-        """Write data to YAML file atomically.
-        
-        Uses a temporary file and atomic rename to prevent corruption.
-        
-        Args:
-            data: Dictionary to write as YAML
-        """
+    def write(self, data: dict[str, Any]) -> None:
         tmp_path = self.path + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f, sort_keys=False)

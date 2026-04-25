@@ -1,0 +1,72 @@
+[project]
+name = "zulip-bot-vc"
+version = "0.2.0"
+description = "Modular Zulip bot (anonymous posting, private access, admin controls)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "AGPL-3.0-or-later" }
+dependencies = [
+    "zulip>=0.9.0,<1.0",
+    "trio>=0.22.0,<1.0",
+    "PyYAML>=6.0,<7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-trio>=0.8",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "types-PyYAML",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["bot_main", "config"]
+
+[tool.setuptools.packages.find]
+include = ["core*", "features*", "storage*", "utils*"]
+exclude = ["tests*", ".venv*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle/pyflakes
+    "I",             # isort
+    "B",             # bugbear
+    "UP",            # pyupgrade
+    "SIM",           # simplify
+    "RUF",
+    "PL",            # pylint subset
+]
+ignore = [
+    "PLR0913",       # too many args (dataclass features)
+    "PLR2004",       # magic numbers in tests/config defaults
+    "PLR0911",       # too many returns
+    "PLR0912",       # too many branches
+    "PLR0915",       # too many statements
+    "E501",          # line length handled by formatter
+    "RUF001",        # we deliberately use lookalike chars (＠, ℹ️) for UX
+    "RUF003",        # same: comments may reference them
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["PLR2004", "S101"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+trio_mode = true
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+warn_redundant_casts = true
+ignore_missing_imports = true
+check_untyped_defs = true

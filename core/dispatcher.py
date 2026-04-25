@@ -1,10 +1,8 @@
-"""Event dispatching system for routing Zulip messages to feature handlers.
+"""Event dispatching system for routing Zulip messages to feature handlers."""
 
-Provides a dispatcher pattern that routes message events to registered
-feature handlers based on their handling criteria.
-"""
+from __future__ import annotations
+
 import logging
-from typing import List
 
 from core.models import MessageEvent, parse_message_event
 
@@ -12,65 +10,52 @@ logger = logging.getLogger(__name__)
 
 
 class FeatureHandler:
-    """
-    Interface for feature modules.
-    """
+    """Interface for feature modules."""
 
-    async def handles(self, event: MessageEvent) -> bool:  # type: ignore[override]
-        """Check if this handler can process the given event.
-        
-        Args:
-            event: The message event to check
-            
-        Returns:
-            True if this handler should process the event
-        """
+    async def handles(self, event: MessageEvent) -> bool:
         raise NotImplementedError
 
-    async def handle(self, event: MessageEvent) -> None:  # type: ignore[override]
-        """Process the given event.
-        
-        Args:
-            event: The message event to process
-        """
+    async def handle(self, event: MessageEvent) -> None:
         raise NotImplementedError
 
 
 class Dispatcher:
     """Routes Zulip message events to registered feature handlers.
-    
-    Maintains a list of feature handlers and dispatches events to those
-    that can handle them. Errors in individual handlers are isolated.
+
+    Drops events whose sender is the bot itself (`bot_user_id`) so handlers
+    cannot self-trigger via the bot's own outgoing messages.
     """
-    def __init__(self) -> None:
-        self._features: List[FeatureHandler] = []
+
+    def __init__(self, bot_user_id: int | None = None) -> None:
+        self._features: list[FeatureHandler] = []
+        self._bot_user_id = bot_user_id
+
+    def set_bot_user_id(self, bot_user_id: int | None) -> None:
+        self._bot_user_id = bot_user_id
 
     def register_feature(self, feature: FeatureHandler) -> None:
-        """Register a feature handler with the dispatcher.
-        
-        Args:
-            feature: FeatureHandler instance to register
-        """
         self._features.append(feature)
 
     async def dispatch_event(self, event_dict: dict) -> None:
-        """Dispatch an event to all registered features.
-        
-        Parses the event and routes it to features that can handle it.
-        Errors in individual features are logged but don't stop processing.
-        
-        Args:
-            event_dict: Raw event dictionary from Zulip
-        """
         msg_event = parse_message_event(event_dict)
         if msg_event is None:
+            # Not a message event we care about (presence, typing, …).
             return
 
+        # Self-trigger guard. Without this, the bot's own outgoing messages
+        # come back through the event queue and can be re-interpreted as
+        # user input — e.g. the anonymous-posting confirmation "You wrote:"
+        # could itself look like a fresh anonymous-post submission. Drop
+        # them before any feature sees them.
+        if self._bot_user_id is not None and msg_event.sender_id == self._bot_user_id:
+            return
+
+        # Walk features in registration order. Each feature decides via
+        # `handles()` whether it owns the event; we catch and log any
+        # exception so one buggy feature can't crash the whole loop.
         for feature in self._features:
             try:
                 if await feature.handles(msg_event):
                     await feature.handle(msg_event)
-            except Exception:  # pylint: disable=broad-exception-caught
-                # Intentionally catch all exceptions to prevent one feature
-                # from crashing the entire bot
+            except Exception:
                 logger.exception("Error in feature %s", feature.__class__.__name__)

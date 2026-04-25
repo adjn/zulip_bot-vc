@@ -1,14 +1,23 @@
 """Private access control feature for the Zulip bot.
 
-Watches specific stream/topic combinations for trigger phrases and automatically
-subscribes users to target streams when they post the correct phrase.
+Watches `(stream, topic)` for an exact (case/whitespace-insensitive)
+trigger phrase; on match, subscribes the sender to a target stream and
+reacts with :saluting_face:.
+
+This is intentionally a low-friction self-subscription mechanism. It is
+NOT access control in any meaningful sense — anyone who learns the phrase
+can self-subscribe. For a stronger model, gate the subscription on
+admin approval (tracked as a long-term recommendation).
 """
+
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any
 
 from config import ConfigManager
-from core.client import ZulipTrioClient
+from core.client import ClientProtocol
 from core.dispatcher import FeatureHandler
 from core.models import MessageEvent
 from utils.matching import normalize_phrase
@@ -18,45 +27,23 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class WatchRule:
-    """Configuration for a private access watch rule.
-    
-    Attributes:
-        stream: Stream to monitor
-        topic: Topic to monitor
-        phrase: Trigger phrase to watch for
-        target_stream: Stream to subscribe users to when phrase is matched
-    """
     stream: str
     topic: str
     phrase: str
     target_stream: str
 
 
+@dataclass
 class PrivateAccessFeature(FeatureHandler):
-    """
-    Watches specific (stream, topic) threads for trigger phrases and
-    subscribes users to target streams, reacting with :saluting_face:.
-    """
+    client: ClientProtocol
+    config_mgr: ConfigManager
 
-    def __init__(
-        self,
-        client: ZulipTrioClient,
-        config_mgr: ConfigManager,
-    ) -> None:
-        self.client = client
-        self.config_mgr = config_mgr
-
-    def _load_rules(self) -> List[WatchRule]:
-        """Load watch rules from configuration.
-        
-        Returns:
-            List of WatchRule objects parsed from config
-        """
+    def _load_rules(self) -> list[WatchRule]:
         cfg = self.config_mgr.get().get("private_access", {})
         if not cfg.get("enabled", False):
             return []
-        rules_conf: List[Dict[str, Any]] = cfg.get("watch_rules", [])
-        rules: List[WatchRule] = []
+        rules_conf: list[dict[str, Any]] = cfg.get("watch_rules", []) or []
+        rules: list[WatchRule] = []
         for r in rules_conf:
             try:
                 rules.append(
@@ -71,17 +58,16 @@ class PrivateAccessFeature(FeatureHandler):
                 logger.warning("Invalid watch rule in config: %s", r)
         return rules
 
+    def _anonymize_logging(self) -> bool:
+        return bool(self.config_mgr.get().get("logging", {}).get("anonymize_user_ids", False))
+
     async def handles(self, event: MessageEvent) -> bool:
         if event.message_type != "stream":
             return False
         rules = self._load_rules()
         if not rules:
             return False
-        # quick check if this (stream, topic) is relevant at all
-        for r in rules:
-            if (r.stream == event.stream) and (r.topic == event.topic):
-                return True
-        return False
+        return any(r.stream == event.stream and r.topic == event.topic for r in rules)
 
     async def handle(self, event: MessageEvent) -> None:
         rules = self._load_rules()
@@ -89,21 +75,21 @@ class PrivateAccessFeature(FeatureHandler):
             return
 
         msg_norm = normalize_phrase(event.content)
+        anonymize = self._anonymize_logging()
+        sender_repr: object = "<redacted>" if anonymize else event.sender_id
 
         for r in rules:
             if r.stream != event.stream or r.topic != event.topic:
                 continue
-            if normalize_phrase(r.phrase) == msg_norm:
-                logger.info(
-                    "PrivateAccess: subscribing sender_id=%s to target_stream=%s "
-                    "due to phrase match",
-                    event.sender_id,
-                    r.target_stream,
-                )
-                # Subscribe this user to the target stream
-                await self.client.add_user_subscriptions(
-                    user_id=event.sender_id,
-                    streams=[r.target_stream],
-                )
-                # React with saluting_face
-                await self.client.react_to_message(event.id, "saluting_face")
+            if normalize_phrase(r.phrase) != msg_norm:
+                continue
+
+            logger.info(
+                "PrivateAccess: subscribing sender_id=%s to target_stream=%s",
+                sender_repr,
+                r.target_stream,
+            )
+            await self.client.add_user_subscriptions(
+                user_id=event.sender_id, streams=[r.target_stream]
+            )
+            await self.client.react_to_message(event.id, "saluting_face")
