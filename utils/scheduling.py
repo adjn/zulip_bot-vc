@@ -1,26 +1,21 @@
 """Message deletion scheduling.
 
-In-memory only — restart loses pending deletions. The privacy contract of
-auto-deleting anonymous posts therefore depends on the bot staying up; a
-durable replacement is tracked as a long-term recommendation.
+State is durable: scheduled deletions live in :class:`storage.db.Storage`
+so the privacy contract of auto-deleting anonymous posts survives a
+bot restart.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import trio
 
+from storage.db import Storage
+
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class ScheduledDeletion:
-    message_id: int
-    delete_at: datetime
 
 
 def _utcnow() -> datetime:
@@ -30,9 +25,11 @@ def _utcnow() -> datetime:
 class DeletionScheduler:
     """Schedules and executes message deletions.
 
-    The single trio-task assumption is documented but not relied on: every
-    mutation of ``_tasks`` is performed under ``_lock``, so concurrent
-    producers and the consumer cannot race on the scan-then-pop boundary.
+    Durable: state lives in :class:`Storage`. The two-phase claim/delete
+    pattern in :meth:`_run_once` ensures that even if the bot crashes
+    between claiming a row and successfully calling ``delete_fn``, the
+    row is gone -- mirroring the previous in-memory behaviour where a
+    failed delete was logged-and-forgotten rather than retried forever.
     """
 
     # Tick interval for the scheduler loop. Override in tests.
@@ -41,24 +38,24 @@ class DeletionScheduler:
     def __init__(
         self,
         delete_fn: Callable[[int], Awaitable[bool]],
+        storage: Storage,
         now_fn: Callable[[], datetime] = _utcnow,
     ) -> None:
         """Construct a scheduler.
 
         :param delete_fn: ``async fn(message_id) -> bool`` performing the
             actual delete (typically ``client.delete_message``).
+        :param storage: durable backing store.
         :param now_fn: time source, overridable in tests.
         """
         self._delete_fn = delete_fn
+        self._storage = storage
         self._now_fn = now_fn
-        self._tasks: dict[int, ScheduledDeletion] = {}
-        self._lock = trio.Lock()
 
     async def schedule_deletion(self, message_id: int, delete_after_minutes: float) -> None:
         """Schedule (or reschedule) deletion of a message."""
         delete_at = self._now_fn() + timedelta(minutes=delete_after_minutes)
-        async with self._lock:
-            self._tasks[message_id] = ScheduledDeletion(message_id, delete_at)
+        await self._storage.schedule_deletion(message_id, delete_at)
         logger.info(
             "Scheduled deletion message_id=%s at %s",
             message_id,
@@ -75,41 +72,39 @@ class DeletionScheduler:
             await trio.sleep(self.POLL_INTERVAL_SECONDS)
 
     async def _run_once(self) -> None:
-        """Pop due tasks atomically, then perform deletes outside the lock."""
-        # Two-phase design:
-        #   1. Under the lock, scan-and-pop everything that's due. This is
-        #      atomic w.r.t. concurrent `schedule_deletion()` calls, so we
-        #      can't pop a message that was just rescheduled to a later time.
-        #   2. Release the lock, then `await` the actual deletes. The Zulip
-        #      API call can take seconds; holding the lock across it would
-        #      block every producer (e.g. SEND from a user) for that long.
-        now = self._now_fn()
-        due: list[ScheduledDeletion] = []
-        async with self._lock:
-            for msg_id, sched in list(self._tasks.items()):
-                if sched.delete_at <= now:
-                    due.append(sched)
-                    self._tasks.pop(msg_id, None)
+        """Claim due rows atomically, then perform deletes outside the txn.
 
-        for sched in due:
+        The claim and the API call are intentionally split:
+
+        1. ``claim_due_deletions`` runs ``SELECT due + DELETE`` in a
+           single ``BEGIN IMMEDIATE`` transaction. Once it returns, the
+           rows are gone from the table -- so concurrent producers (i.e.
+           ``schedule_deletion``) can't double-claim them.
+        2. The Zulip API call lives outside any DB transaction. It can
+           take seconds; we don't want to hold a write lock that long.
+
+        Failure handling matches the previous in-memory version: if the
+        API delete fails we log a warning and move on. Surviving
+        transient failures durably is the next persistence improvement.
+        """
+        now = self._now_fn()
+        due_ids = await self._storage.claim_due_deletions(now)
+
+        for msg_id in due_ids:
             try:
-                ok = await self._delete_fn(sched.message_id)
+                ok = await self._delete_fn(msg_id)
             except Exception:
-                logger.exception("Delete raised for message_id=%s", sched.message_id)
+                logger.exception("Delete raised for message_id=%s", msg_id)
                 ok = False
             if ok:
-                logger.info("Deleted message_id=%s", sched.message_id)
+                logger.info("Deleted message_id=%s", msg_id)
             else:
-                # Don't re-queue indefinitely: we have no notion of permanent
-                # vs transient failure today. Surface as a warning so it's
-                # noticed; durable retry is part of the long-term persistence
-                # work.
                 logger.warning(
                     "Delete failed for message_id=%s; not retrying",
-                    sched.message_id,
+                    msg_id,
                 )
 
     # --- inspection (used by tests) ------------------------------------
 
-    def pending_count(self) -> int:
-        return len(self._tasks)
+    async def pending_count(self) -> int:
+        return await self._storage.pending_deletion_count()

@@ -14,6 +14,7 @@ from core.dispatcher import Dispatcher
 from features.admin_controls import AdminControlsFeature
 from features.anonymous_posting import AnonymousPostingFeature
 from features.private_access import PrivateAccessFeature
+from storage.db import Storage
 from utils.scheduling import DeletionScheduler
 
 logger = logging.getLogger(__name__)
@@ -87,15 +88,34 @@ async def main() -> None:
     )
 
     # --- 3. Wire features ------------------------------------------------
+    # Open the durable storage before constructing the scheduler/feature
+    # so any pre-existing scheduled deletions are picked up on the next
+    # scheduler tick. BOT_DB_PATH overrides config for ops convenience
+    # (e.g. tests, ephemeral containers, alternative volumes).
+    db_path = os.environ.get(
+        "BOT_DB_PATH",
+        config_mgr.get().get("storage", {}).get("db_path", "./data/bot.db"),
+    )
+    try:
+        storage = await Storage.open(db_path)
+    except OSError as e:
+        # Fail closed: refusing to start is safer than silently reverting
+        # to in-memory mode and quietly breaking the privacy contract.
+        raise RuntimeError(
+            f"Could not open storage at {db_path!r}: {e}. "
+            "Set BOT_DB_PATH to a writable location or fix permissions."
+        ) from e
+    logger.info("Storage opened at %s", db_path)
+
     # The scheduler is a callable consumer of `client.delete_message`; it
     # doesn't import the client class, which keeps it unit-testable with a
     # plain async function in tests/.
-    scheduler = DeletionScheduler(delete_fn=client.delete_message)
+    scheduler = DeletionScheduler(delete_fn=client.delete_message, storage=storage)
     dispatcher = Dispatcher(bot_user_id=bot_user_id if isinstance(bot_user_id, int) else None)
 
     admin_feature = AdminControlsFeature(client=client, config_mgr=config_mgr, scheduler=scheduler)
     anon_feature = AnonymousPostingFeature(
-        client=client, config_mgr=config_mgr, scheduler=scheduler
+        client=client, config_mgr=config_mgr, scheduler=scheduler, storage=storage
     )
     access_feature = PrivateAccessFeature(client=client, config_mgr=config_mgr)
     # Order matters: dispatcher walks features in registration order and
@@ -109,9 +129,12 @@ async def main() -> None:
     # If either task crashes, trio cancels the other and propagates the
     # exception out of `trio.run` — i.e. we exit the process rather than
     # silently keep one half alive.
-    async with trio.open_nursery() as nursery:
-        nursery.start_soon(scheduler.run)
-        nursery.start_soon(_event_loop, client, dispatcher)
+    try:
+        async with trio.open_nursery() as nursery:
+            nursery.start_soon(scheduler.run)
+            nursery.start_soon(_event_loop, client, dispatcher)
+    finally:
+        await storage.close()
 
 
 if __name__ == "__main__":

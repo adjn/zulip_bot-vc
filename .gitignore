@@ -26,6 +26,9 @@ config.yml
 config.yaml.tmp
 *.tmp
 
+# Runtime state (SQLite DB, logs, etc.)
+data/
+
 # Editors
 .vscode/
 .idea/
