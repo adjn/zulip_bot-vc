@@ -11,16 +11,16 @@ By default, **all feature modules are disabled**. You must explicitly enable the
 
 ---
 
-## Installation (I haven't reviewed if any of this is correct, do not follow)
+## Installation
 
-1. **Clone or copy the project** to a machine that can reach your Zulip server (e.g., EC2, or for testing, GitHub Actions).
+1. **Clone or copy the project** to a machine that can reach your Zulip server.
 
 2. **Create a virtualenv** and install dependencies:
 
    ```bash
    python3 -m venv .venv
    source .venv/bin/activate
-   pip install -r requirements.txt
+   pip install -e '.[dev]'   # use 'pip install -r requirements.txt' for runtime-only
    ```
 
 3. **Create a Zulip bot user** in your organization and download its `.zuliprc` file.
@@ -34,7 +34,7 @@ By default, **all feature modules are disabled**. You must explicitly enable the
 4. (Optional) Set config path via env:
 
    ```bash
-   export ZULIP_BOT_CONFIG=/path/to/config.yaml
+   export ZULIP_BOT_VC_CONFIG=/path/to/config.yaml
    ```
 
    If not set, `config.yaml` in the current directory will be used/created.
@@ -67,8 +67,12 @@ A workflow is provided at [`.github/workflows/run-zulip-bot.yml`](.github/workfl
 Key points:
 
 - Uses **Python 3.13**.
-- Reads your `.zuliprc` contents from the secret `ZULIP_RC`.
+- Reads your `.zuliprc` contents from the secret `ZULIP_RC`; the workflow
+  writes it under `$RUNNER_TEMP` (not the checkout dir) with `chmod 600` and
+  shreds it on job exit.
 - Optionally reads a `config.yaml` from the secret `ZULIP_BOT_CONFIG`.
+- A `concurrency:` group prevents overlapping runs from racing the same bot
+  identity.
 
 ### Required secrets
 
@@ -91,26 +95,30 @@ Example:
 
 ```yaml
 anonymous_posting:
-  enabled: false       # <- change to true to enable
+  enabled: false                 # <- change to true to enable
   target_stream: anonymous
   target_topic: general
-  delete_after_minutes: 10080  # 7 days (used when enabled)
+  delete_after_minutes: 10080    # 7 days
+  max_content_length: 4000       # hard cap on outgoing content
+  min_seconds_between_posts: 30  # per-sender cooldown
+  scrub_wildcard_mentions: true  # defang @all / @everyone / @stream
+  pending_ttl_minutes: 10        # how long a SEND/CANCEL prompt is honoured
 
 private_access:
-  enabled: false       # <- change to true to enable
+  enabled: false                 # <- change to true to enable
   watch_rules:
     - stream: access-requests
       topic: example-topic
       phrase: "Default string 1"
       target_stream: private-room-1
-    - stream: access-requests
-      topic: example-topic
-      phrase: "Default string 2"
-      target_stream: private-room-2
+
+admin:
+  super_admin_user_ids: []       # optional allowlist for super-admin commands
+  role_cache_ttl_seconds: 60     # cache for is_admin/is_owner lookups
 
 logging:
   level: INFO
-  anonymize_user_ids: true
+  anonymize_user_ids: false
 ```
 
 You can edit this file directly or use admin commands (recommended for most updates once the bot is running, though `enabled` flags are currently file-only).
@@ -147,11 +155,14 @@ anonymous_posting:
 3. If the user replies `SEND`:
    - Bot posts `Anonymous message:\n\n<content>` to the configured stream/topic.
    - Schedules deletion of that posted message after `delete_after_minutes`.
-   - Attempts to delete the original DMs (subject to organization policy).
+   - Schedules deletion of the bot's own confirmation prompt.
+   - **Note:** The user's original DM is *not* deleted. Bots cannot generally
+     delete other users' messages in Zulip; the user can delete their own DM
+     manually if their org permits.
 
 4. If the user replies `CANCEL`:
    - Bot does **not** post.
-   - Attempts to delete the original DMs.
+   - Schedules deletion of the bot's own confirmation prompt.
    - Confirms cancellation.
 
 5. If the user replies with anything else during the confirmation step:
@@ -190,11 +201,17 @@ private_access:
 
 Multiple rules can be specified in `watch_rules`.
 
-Logs for this feature **do include** the numeric `sender_id` (as you requested):
+By default subscription logs include the numeric `sender_id`:
 
 ```text
-PrivateAccess: subscribing sender_id=42 to target_stream=game-room due to phrase match
+PrivateAccess: subscribing sender_id=42 to target_stream=game-room
 ```
+
+Set `logging.anonymize_user_ids: true` to redact the id in logs.
+
+> **Note:** This is a low-friction self-subscription mechanism, *not* access
+> control in any cryptographic sense — anyone who learns the trigger phrase
+> can self-subscribe. For stronger gating (admin approval), open an issue.
 
 ---
 
@@ -274,10 +291,15 @@ The body after the first line is parsed as YAML.
 
 ## Privacy and logging
 
-- For anonymous posting:
-  - Logs avoid user emails and message contents and only use IDs where needed.
-- For private access:
-  - Logs do include `sender_id` and target stream name, as requested.
+- **Anonymous posting**: logs avoid user emails and message content; only the
+  posted/confirmation message IDs and a sanitized event id are recorded.
+- **Private access**: `sender_id` is included in subscription logs by default.
+  Set `logging.anonymize_user_ids: true` to redact it.
+- **Persistence caveat**: pending confirmations and scheduled deletions live in
+  process memory only. Bot restart loses them; the privacy contract of
+  auto-deleting anonymous posts therefore depends on the bot staying up. A
+  durable replacement (SQLite-backed scheduler + pending state) is tracked as
+  a long-term improvement.
 
 ---
 
@@ -307,3 +329,20 @@ dispatcher.register_feature(my_feature)
 ```
 
 This design lets you grow the bot function-by-function over time.
+
+---
+
+## Development
+
+Lint, type-check, and test:
+
+```bash
+pip install -e '.[dev]'
+ruff check .
+ruff format --check .
+mypy .
+pytest
+```
+
+CI runs the same on Python 3.12 and 3.13. See [`AGENTS.md`](AGENTS.md) for the
+canonical agent guide (used by both Copilot and other coding agents).

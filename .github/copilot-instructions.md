@@ -1,36 +1,47 @@
 # GitHub Copilot Instructions
 
-## Project Overview
-This is a Zulip bot with modular features including anonymous posting, private access control, and admin controls.
+> The canonical agent guide is `AGENTS.md` at the repo root. Keep this file
+> short and in sync; deeper rules live there.
 
-## Code Style Guidelines
-- Follow PEP 8 style guidelines for Python code
-- Include comments and docstrings for all functions and classes
-- Use type hints for function parameters and return values
-- Use async/await patterns with trio for asynchronous operations
-- Keep functions focused and modular
+## Project
+
+Modular Zulip bot in Python (3.12+) using `zulip` SDK + `trio`. Features:
+anonymous DM relay with scheduled deletion, watch-and-subscribe rule engine,
+admin DM commands.
+
+## Hard rules (do not violate)
+
+- **Never block trio.** All blocking Zulip / file I/O goes through
+  `trio.to_thread.run_sync(...)`. The long-poll path uses
+  `abandon_on_cancel=True` so shutdown is prompt.
+- **Drop self-authored events** in the dispatcher.
+- **Default-disabled** for every feature in `DEFAULT_CONFIG`.
+- **Anonymous content is untrusted.** Strip wildcard mentions, length-cap,
+  and escape backticks before placing in a code fence.
+- **Don't log full API responses or raw user content** at WARNING+.
+- **Admin auth** is `is_admin || is_owner` plus a config allowlist for super-
+  admin actions. Cache role lookups with a TTL.
+- **No secrets in code, logs, or repo working directory.** CI writes
+  `.zuliprc` to `$RUNNER_TEMP`.
 
 ## Architecture
-- `core/`: Core bot functionality (client, dispatcher, models)
-- `features/`: Feature modules (admin controls, anonymous posting, private access)
-- `storage/`: Data persistence layer
-- `utils/`: Utility functions (matching, scheduling)
 
-## Best Practices
-- Log important events and errors using the logger
-- Handle errors gracefully with appropriate error messages
-- Use the dispatcher pattern for handling different message types
-- Store data using the file_store module
-- Keep configuration separate in config.py
-- Update the readme with new features or changes
-- Do not store sensitive information in the codebase
+- `core.dispatcher.FeatureHandler` is the feature contract.
+- `core.client.ZulipTrioClient` wraps the SDK; tests use a fake matching the
+  protocol shape in `tests/fakes.py`.
+- `ConfigManager` deep-merges defaults and persists atomically.
+- Scheduled deletions and pending confirmations are in-memory only today —
+  durability work goes in `storage/` and is gated by tests.
 
-## Testing Considerations
-- Ensure async functions are properly awaited
-- Mock external Zulip API calls in tests
-- Test error handling paths
+## Style
 
-## Dependencies
-- Uses the Zulip Python API client
-- Uses trio for async operations
-- See requirements.txt for full dependency list
+PEP 8, type hints, docstrings on public APIs, `ruff` for lint+format, `mypy`
+for type-checking, `pytest` + `pytest-trio` for tests.
+
+## Don't
+
+- Don't read HTTP headers off `zulip.Client` response dicts — the SDK
+  discards them.
+- Don't reintroduce `pylint`.
+- Don't add a new feature without an accompanying test.
+- Don't add a new feature without `enabled: False` in `DEFAULT_CONFIG`.

@@ -1,47 +1,28 @@
-"""Data models for Zulip bot message events.
+"""Data models for Zulip bot message events."""
 
-Defines MessageEvent dataclass and parsing utilities for handling
-Zulip message events.
-"""
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 @dataclass
-class MessageEvent:  # pylint: disable=too-many-instance-attributes
-    """Represents a parsed Zulip message event.
-    
-    Attributes:
-        id: Message ID
-        sender_id: ID of the user who sent the message
-        sender_email: Email of the sender
-        content: Message content text
-        message_type: Type of message ("private" or "stream")
-        stream: Stream name (for stream messages)
-        topic: Topic name (for stream messages)
-        is_me_message: Whether this is a /me message
-        raw_event: Original event dictionary from Zulip API
-    """
+class MessageEvent:
+    """A parsed Zulip message event."""
+
     id: int
     sender_id: int
     sender_email: str
     content: str
     message_type: str  # "private" or "stream"
-    stream: Optional[str]
-    topic: Optional[str]
+    stream: str | None
+    topic: str | None
     is_me_message: bool
-    raw_event: Dict[str, Any]
+    raw_event: dict[str, Any]
 
 
-def parse_message_event(event: Dict[str, Any]) -> Optional[MessageEvent]:
-    """Parse a Zulip event dictionary into a MessageEvent.
-    
-    Args:
-        event: Raw event dictionary from Zulip API
-        
-    Returns:
-        MessageEvent if this is a valid message event, None otherwise
-    """
+def parse_message_event(event: dict[str, Any]) -> MessageEvent | None:
+    """Parse a raw Zulip event dict into a `MessageEvent` or None."""
     if event.get("type") != "message":
         return None
     msg = event.get("message", {})
@@ -49,10 +30,15 @@ def parse_message_event(event: Dict[str, Any]) -> Optional[MessageEvent]:
     if msg_type not in ("private", "stream"):
         return None
 
+    msg_id = msg.get("id")
+    sender_id = msg.get("sender_id")
+    if not isinstance(msg_id, int) or not isinstance(sender_id, int):
+        return None
+
     return MessageEvent(
-        id=msg.get("id"),
-        sender_id=msg.get("sender_id"),
-        sender_email=msg.get("sender_email"),
+        id=msg_id,
+        sender_id=sender_id,
+        sender_email=msg.get("sender_email", ""),
         content=msg.get("content") or "",
         message_type=msg_type,
         stream=msg.get("display_recipient") if msg_type == "stream" else None,
