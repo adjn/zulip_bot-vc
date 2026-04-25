@@ -110,3 +110,52 @@ async def test_first_token_is_exact_not_prefix(tmp_path: Path) -> None:
     feat, fc, _, _storage = await _make(tmp_path)
     await feat.handle(_dm(1, "!configure show"))
     assert any("Unknown command" in d.content for d in fc.dms)
+
+
+@pytest.mark.trio
+async def test_help_lists_all_commands(tmp_path: Path) -> None:
+    feat, fc, _, _storage = await _make(tmp_path)
+    await feat.handle(_dm(1, "!help"))
+    msg = fc.dms[0].content
+    for name in ("!help", "!config", "!anon", "!access", "!subscribe"):
+        assert name in msg
+
+
+@pytest.mark.trio
+async def test_help_subcommand_shows_per_command_usage(tmp_path: Path) -> None:
+    feat, fc, _, _storage = await _make(tmp_path)
+    await feat.handle(_dm(1, "!help !anon"))
+    assert any("delete_after_minutes" in d.content for d in fc.dms)
+
+
+@pytest.mark.trio
+async def test_help_tolerates_missing_bang(tmp_path: Path) -> None:
+    """`!help anon` should work the same as `!help !anon`."""
+    feat, fc, _, _storage = await _make(tmp_path)
+    await feat.handle(_dm(1, "!help anon"))
+    assert any("delete_after_minutes" in d.content for d in fc.dms)
+
+
+@pytest.mark.trio
+async def test_help_unknown_command(tmp_path: Path) -> None:
+    feat, fc, _, _storage = await _make(tmp_path)
+    await feat.handle(_dm(1, "!help !nope"))
+    assert any("Unknown command" in d.content for d in fc.dms)
+
+
+@pytest.mark.trio
+async def test_unknown_command_lists_known(tmp_path: Path) -> None:
+    """The 'unknown' reply should enumerate registered commands so a
+    user mistyping a name can find the right one."""
+    feat, fc, _, _storage = await _make(tmp_path)
+    await feat.handle(_dm(1, "!nope"))
+    msg = fc.dms[0].content
+    assert "Unknown command" in msg
+    assert "!anon" in msg and "!config" in msg
+
+
+@pytest.mark.trio
+async def test_anon_set_unknown_field_hints_at_help(tmp_path: Path) -> None:
+    feat, fc, _, _storage = await _make(tmp_path)
+    await feat.handle(_dm(1, "!anon set wat 1"))
+    assert any("!help !anon" in d.content for d in fc.dms)

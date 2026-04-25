@@ -227,6 +227,10 @@ These admin capabilities are **enabled by default** (no config flag to turn them
 
 **Common commands:**
 
+DM the bot `!help` for an auto-generated list of every admin command,
+or `!help <command>` (e.g. `!help !anon`) for that command's usage. The
+sections below describe the most common ones in more detail.
+
 ### Subscribe bot to streams
 
 ```text
