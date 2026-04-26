@@ -56,6 +56,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "stream": None,
         "topic": "audit",
     },
+    "welcome": {
+        # Master switch. Off by default: a fresh deploy must opt in
+        # before DMing strangers.
+        "enabled": False,
+        # Wait this long after `realm_user.add` before delivering.
+        # Lets the realm's own join flow (admin DMs, intro stream
+        # posts) land first.
+        "delay_minutes": 5,
+        "message": "Hi! Welcome to the realm. :wave:",
+    },
     "logging": {
         "level": "INFO",
         "anonymize_user_ids": False,

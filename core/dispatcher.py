@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 
 from core.models import MessageEvent, parse_message_event
 
 logger = logging.getLogger(__name__)
+
+
+# A realm_user.add handler is just `async fn(user_id: int) -> None`.
+# Kept narrow: handlers don't get the raw event, so a future change to
+# the Zulip event shape only touches the dispatcher.
+RealmUserAddHandler = Callable[[int], Awaitable[None]]
 
 
 class FeatureHandler:
@@ -20,14 +27,15 @@ class FeatureHandler:
 
 
 class Dispatcher:
-    """Routes Zulip message events to registered feature handlers.
+    """Routes Zulip events to registered feature / realm-user handlers.
 
-    Drops events whose sender is the bot itself (`bot_user_id`) so handlers
-    cannot self-trigger via the bot's own outgoing messages.
+    Drops message events whose sender is the bot itself (`bot_user_id`)
+    so handlers cannot self-trigger via the bot's own outgoing messages.
     """
 
     def __init__(self, bot_user_id: int | None = None) -> None:
         self._features: list[FeatureHandler] = []
+        self._realm_user_add_handlers: list[RealmUserAddHandler] = []
         self._bot_user_id = bot_user_id
 
     def set_bot_user_id(self, bot_user_id: int | None) -> None:
@@ -36,7 +44,20 @@ class Dispatcher:
     def register_feature(self, feature: FeatureHandler) -> None:
         self._features.append(feature)
 
+    def register_realm_user_add_handler(self, handler: RealmUserAddHandler) -> None:
+        """Register a callback for ``realm_user`` op=``add`` events."""
+        self._realm_user_add_handlers.append(handler)
+
     async def dispatch_event(self, event_dict: dict) -> None:
+        event_type = event_dict.get("type")
+        if event_type == "realm_user":
+            await self._dispatch_realm_user(event_dict)
+            return
+        if event_type != "message":
+            return
+        await self._dispatch_message(event_dict)
+
+    async def _dispatch_message(self, event_dict: dict) -> None:
         msg_event = parse_message_event(event_dict)
         if msg_event is None:
             # Not a message event we care about (presence, typing, …).
@@ -59,3 +80,19 @@ class Dispatcher:
                     await feature.handle(msg_event)
             except Exception:
                 logger.exception("Error in feature %s", feature.__class__.__name__)
+
+    async def _dispatch_realm_user(self, event_dict: dict) -> None:
+        if event_dict.get("op") != "add":
+            return
+        person = event_dict.get("person") or {}
+        user_id = person.get("user_id")
+        if not isinstance(user_id, int):
+            return
+        # Don't welcome bots (including ourselves on first connect).
+        if person.get("is_bot"):
+            return
+        for handler in self._realm_user_add_handlers:
+            try:
+                await handler(user_id)
+            except Exception:
+                logger.exception("Error in realm_user.add handler %s", handler)

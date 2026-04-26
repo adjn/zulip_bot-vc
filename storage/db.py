@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 # Bumped whenever the schema changes. Migrations live in
 # :func:`_apply_migrations` and are idempotent.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 _T = TypeVar("_T")
@@ -203,6 +203,76 @@ class Storage:
     async def pending_deletion_count(self) -> int:
         def _do() -> int:
             cur = self._conn.execute("SELECT COUNT(*) FROM scheduled_deletions")
+            (n,) = cur.fetchone()
+            return int(n)
+
+        return await self._run(_do)
+
+    # ------------------------------------------------------------------
+    # pending_welcomes
+    # ------------------------------------------------------------------
+    #
+    # Mirrors scheduled_deletions but keyed by user_id and with
+    # idempotent inserts (re-receiving `realm_user.add` after a queue
+    # reconnect must not double-schedule).
+
+    async def schedule_welcome(self, user_id: int, deliver_at: datetime) -> None:
+        ts = _iso(deliver_at)
+
+        def _do() -> None:
+            self._conn.execute(
+                "INSERT INTO pending_welcomes (user_id, deliver_at) VALUES (?, ?)"
+                " ON CONFLICT(user_id) DO NOTHING",
+                (user_id, ts),
+            )
+
+        await self._run(_do)
+
+    async def cancel_welcome(self, user_id: int) -> None:
+        def _do() -> None:
+            self._conn.execute(
+                "DELETE FROM pending_welcomes WHERE user_id = ?",
+                (user_id,),
+            )
+
+        await self._run(_do)
+
+    async def claim_due_welcomes(self, now: datetime) -> list[int]:
+        """Atomically take ownership of welcomes due at *now*.
+
+        Same claim-then-delete pattern as ``claim_due_deletions``: by the
+        time we return, the rows are gone, so a crash mid-DM means the
+        welcome is dropped rather than spammed.
+        """
+        ts = _iso(now)
+
+        def _do() -> list[int]:
+            cur = self._conn.cursor()
+            try:
+                cur.execute("BEGIN IMMEDIATE")
+                cur.execute(
+                    "SELECT user_id FROM pending_welcomes WHERE deliver_at <= ?",
+                    (ts,),
+                )
+                ids = [row[0] for row in cur.fetchall()]
+                if ids:
+                    cur.executemany(
+                        "DELETE FROM pending_welcomes WHERE user_id = ?",
+                        [(i,) for i in ids],
+                    )
+                cur.execute("COMMIT")
+                return ids
+            except Exception:
+                cur.execute("ROLLBACK")
+                raise
+            finally:
+                cur.close()
+
+        return await self._run(_do)
+
+    async def pending_welcome_count(self) -> int:
+        def _do() -> int:
+            cur = self._conn.execute("SELECT COUNT(*) FROM pending_welcomes")
             (n,) = cur.fetchone()
             return int(n)
 
@@ -484,5 +554,28 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             conn.execute("ROLLBACK")
             raise
         version = 2
+
+    if version < 3:
+        # v3: pending welcome DMs. Keyed by user_id so a duplicate
+        # `realm_user.add` event (idempotent retries during reconnect)
+        # collapses to a single scheduled welcome rather than spamming.
+        conn.execute("BEGIN")
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS pending_welcomes ("
+                "  user_id INTEGER PRIMARY KEY,"
+                "  deliver_at TEXT NOT NULL"
+                ")"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pending_welcomes_deliver_at "
+                "  ON pending_welcomes(deliver_at)"
+            )
+            _set_version(conn, 3)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        version = 3
 
     logger.info("Database migrated to schema version %s", version)

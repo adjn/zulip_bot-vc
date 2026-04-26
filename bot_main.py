@@ -19,6 +19,7 @@ from core.scheduler import Scheduler
 from features.admin_controls import AdminControlsFeature
 from features.anonymous_posting import AnonymousPostingFeature
 from features.private_access import PrivateAccessFeature
+from features.welcome import WelcomeFeature
 from storage.db import Storage
 from utils.scheduling import DeletionScheduler
 
@@ -70,7 +71,7 @@ async def _event_loop(client: ZulipTrioClient, dispatcher: Dispatcher) -> None:
 
         try:
             queue: dict[str, Any] = await client.register(
-                event_types=["message"],
+                event_types=["message", "realm_user"],
                 client_gravatar=False,
                 apply_markdown=False,
             )
@@ -186,12 +187,17 @@ async def main() -> None:
     admin_feature = AdminControlsFeature(ctx=ctx)
     anon_feature = AnonymousPostingFeature(ctx=ctx)
     access_feature = PrivateAccessFeature(ctx=ctx)
+    welcome_feature = WelcomeFeature(ctx=ctx)
     # Order matters: dispatcher walks features in registration order and
     # short-circuits on the first `handles()` that returns True. Admin must
     # be first so `!`-prefixed DMs are routed to admin commands before
     # anonymous posting tries to interpret them as content.
     for f in (admin_feature, anon_feature, access_feature):
         dispatcher.register_feature(f)
+    # Welcome doesn't observe message events; it hooks realm_user.add and
+    # ticks on the scheduler. Wire those two in directly.
+    dispatcher.register_realm_user_add_handler(welcome_feature.on_user_added)
+    scheduler.register("welcome", welcome_feature.tick)
 
     # --- 4. Run the two long-lived tasks under one nursery ---------------
     # If either task crashes, trio cancels the other and propagates the
