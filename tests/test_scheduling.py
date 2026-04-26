@@ -35,19 +35,19 @@ async def test_schedule_and_run_once() -> None:
         await s.schedule_deletion(message_id=2, delete_after_minutes=20)
 
         # Not due yet
-        await s._run_once()
+        await s.tick()
         assert deleted == []
         assert await s.pending_count() == 2
 
         # Advance past first deadline only
         now.t = now.t + timedelta(minutes=15)
-        await s._run_once()
+        await s.tick()
         assert deleted == [1]
         assert await s.pending_count() == 1
 
         # Advance past second
         now.t = now.t + timedelta(minutes=10)
-        await s._run_once()
+        await s.tick()
         assert deleted == [1, 2]
         assert await s.pending_count() == 0
     finally:
@@ -66,8 +66,8 @@ async def test_failed_delete_is_not_retried() -> None:
     s, storage = await _fresh_scheduler(delete_fn, now)
     try:
         await s.schedule_deletion(message_id=99, delete_after_minutes=0)
-        await s._run_once()
-        await s._run_once()
+        await s.tick()
+        await s.tick()
         assert calls == [99]
         assert await s.pending_count() == 0
     finally:
@@ -89,11 +89,11 @@ async def test_reschedule_replaces_existing() -> None:
         await s.schedule_deletion(message_id=7, delete_after_minutes=60)
 
         now.t = now.t + timedelta(minutes=10)
-        await s._run_once()
+        await s.tick()
         assert deleted == []  # rescheduled to +60, not yet due
 
         now.t = now.t + timedelta(minutes=60)
-        await s._run_once()
+        await s.tick()
         assert deleted == [7]
     finally:
         await storage.close()
@@ -108,7 +108,7 @@ async def test_delete_exception_does_not_crash_loop() -> None:
     s, storage = await _fresh_scheduler(delete_fn, now)
     try:
         await s.schedule_deletion(message_id=5, delete_after_minutes=0)
-        await s._run_once()
+        await s.tick()
         assert await s.pending_count() == 0
     finally:
         await storage.close()
@@ -139,7 +139,7 @@ async def test_pending_state_survives_restart(tmp_path: Path) -> None:
     s2_storage = await Storage.open(db_path)
     try:
         s2 = DeletionScheduler(delete_fn=delete_fn, storage=s2_storage, now_fn=now)
-        await s2._run_once()
+        await s2.tick()
         assert deleted == [42]
         assert await s2.pending_count() == 0
     finally:

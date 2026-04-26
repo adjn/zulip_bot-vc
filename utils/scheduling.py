@@ -3,6 +3,11 @@
 State is durable: scheduled deletions live in :class:`storage.db.Storage`
 so the privacy contract of auto-deleting anonymous posts survives a
 bot restart.
+
+The polling loop itself lives in :class:`core.scheduler.Scheduler`.
+This module owns the deletion-specific *tick* (claim due rows, call
+the Zulip delete API) and exposes :meth:`DeletionScheduler.schedule_deletion`
+as the public API for features.
 """
 
 from __future__ import annotations
@@ -10,8 +15,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-
-import trio
 
 from storage.db import Storage
 
@@ -26,14 +29,14 @@ class DeletionScheduler:
     """Schedules and executes message deletions.
 
     Durable: state lives in :class:`Storage`. The two-phase claim/delete
-    pattern in :meth:`_run_once` ensures that even if the bot crashes
+    pattern in :meth:`tick` ensures that even if the bot crashes
     between claiming a row and successfully calling ``delete_fn``, the
     row is gone -- mirroring the previous in-memory behaviour where a
     failed delete was logged-and-forgotten rather than retried forever.
-    """
 
-    # Tick interval for the scheduler loop. Override in tests.
-    POLL_INTERVAL_SECONDS = 60
+    The polling loop itself lives in :class:`core.scheduler.Scheduler`;
+    register :meth:`tick` with it at startup.
+    """
 
     def __init__(
         self,
@@ -62,16 +65,7 @@ class DeletionScheduler:
             delete_at.isoformat(),
         )
 
-    async def run(self) -> None:
-        """Main scheduler loop. Tick every ``POLL_INTERVAL_SECONDS``."""
-        while True:
-            try:
-                await self._run_once()
-            except Exception:
-                logger.exception("Error in DeletionScheduler loop")
-            await trio.sleep(self.POLL_INTERVAL_SECONDS)
-
-    async def _run_once(self) -> None:
+    async def tick(self) -> None:
         """Claim due rows atomically, then perform deletes outside the txn.
 
         The claim and the API call are intentionally split:

@@ -15,6 +15,7 @@ from core.authz import Authorizer
 from core.client import QueueInvalidated, ZulipTrioClient
 from core.context import FeatureContext
 from core.dispatcher import Dispatcher
+from core.scheduler import Scheduler
 from features.admin_controls import AdminControlsFeature
 from features.anonymous_posting import AnonymousPostingFeature
 from features.private_access import PrivateAccessFeature
@@ -160,7 +161,9 @@ async def main() -> None:
     # The scheduler is a callable consumer of `client.delete_message`; it
     # doesn't import the client class, which keeps it unit-testable with a
     # plain async function in tests/.
-    scheduler = DeletionScheduler(delete_fn=client.delete_message, storage=storage)
+    deletion_scheduler = DeletionScheduler(delete_fn=client.delete_message, storage=storage)
+    scheduler = Scheduler()
+    scheduler.register("message_deletion", deletion_scheduler.tick)
     dispatcher = Dispatcher(bot_user_id=bot_user_id if isinstance(bot_user_id, int) else None)
     authz = Authorizer(client=client, config_mgr=config_mgr)
     audit = AuditLog(storage=storage, config_mgr=config_mgr, client=client)
@@ -173,7 +176,7 @@ async def main() -> None:
         client=client,
         config_mgr=config_mgr,
         storage=storage,
-        scheduler=scheduler,
+        scheduler=deletion_scheduler,
         authz=authz,
         audit=audit,
         bot_user_id=bot_user_id if isinstance(bot_user_id, int) else None,
