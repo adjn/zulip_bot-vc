@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import UTC, datetime
 from typing import Any
 
 import trio
@@ -163,6 +164,7 @@ async def main() -> None:
     dispatcher = Dispatcher(bot_user_id=bot_user_id if isinstance(bot_user_id, int) else None)
     authz = Authorizer(client=client, config_mgr=config_mgr)
     audit = AuditLog(storage=storage, config_mgr=config_mgr, client=client)
+    started_at = datetime.now(UTC)
 
     # Single shared dependency container; new cross-cutting resources
     # (audit log, authz, …) plug in by adding a field to FeatureContext
@@ -175,6 +177,7 @@ async def main() -> None:
         authz=authz,
         audit=audit,
         bot_user_id=bot_user_id if isinstance(bot_user_id, int) else None,
+        started_at=started_at,
     )
 
     admin_feature = AdminControlsFeature(ctx=ctx)
