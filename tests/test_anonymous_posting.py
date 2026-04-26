@@ -251,3 +251,25 @@ async def test_cooldown_survives_restart(tmp_path: Path) -> None:
         assert any("Please wait" in d.content for d in fc2.dms)
     finally:
         await s2.close()
+
+
+def test_scrub_wildcards_handles_silent_role_mention() -> None:
+    """`@_*role*_` is the silent variant of `@*role*` and was a gap pre-hardening."""
+    s = "hi @_*moderators*_ heads up"
+    out = _scrub_wildcards(s)
+    assert "@_*moderators*_" not in out
+    assert "moderators" in out  # text preserved, only the leading @ defanged
+
+
+@pytest.mark.trio
+async def test_empty_message_is_rejected_before_pending_row(tmp_path: Path) -> None:
+    """Whitespace-only content shouldn't open a confirmation flow."""
+    feat, fc, _sched, storage = await _make_feature(tmp_path)
+    try:
+        await feat.handle(_event(1, "   \n  "))
+        # We expect a single error DM and *no* pending row.
+        assert any("empty" in d.content.lower() for d in fc.dms)
+        pending = await storage.fetch_pending(1, now=datetime.now(UTC))
+        assert pending is None
+    finally:
+        await storage.close()

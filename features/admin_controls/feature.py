@@ -60,6 +60,35 @@ def _coerce_bool(value: str) -> bool:
     return value.strip().lower() in {"true", "1", "yes", "on"}
 
 
+# Sane bounds for the int-typed `anonymous_posting.*` fields. We bound
+# *upper* limits not because Zulip will respect them but because mistyped
+# values (e.g. `delete_after_minutes: 10080000`) silently break the
+# privacy contract — the auto-delete may never fire. Pick conservative
+# ceilings; admins who genuinely need more can edit the config file.
+_ANON_INT_BOUNDS: dict[str, tuple[int, int]] = {
+    # 1 minute … 1 year
+    "delete_after_minutes": (1, 60 * 24 * 366),
+    # Zulip itself caps message bodies at 10000 chars.
+    "max_content_length": (1, 10_000),
+    # 0 disables the cooldown; 1 hour ceiling keeps a typo from locking
+    # everyone out for days.
+    "min_seconds_between_posts": (0, 60 * 60),
+    # 1 minute … 1 day for an abandoned confirmation flow.
+    "pending_ttl_minutes": (1, 60 * 24),
+}
+
+
+def _validate_anon_int(field_name: str, value: int) -> str | None:
+    """Return an error string if *value* is out of bounds, else ``None``."""
+    bounds = _ANON_INT_BOUNDS.get(field_name)
+    if bounds is None:
+        return None
+    lo, hi = bounds
+    if value < lo or value > hi:
+        return f"{field_name} must be between {lo} and {hi} (got {value})."
+    return None
+
+
 @dataclass
 class AdminControlsFeature(FeatureHandler):
     ctx: FeatureContext
@@ -310,12 +339,17 @@ class AdminControlsFeature(FeatureHandler):
             "pending_ttl_minutes",
         }:
             try:
-                anon_cfg[target_field] = int(value)
+                ivalue = int(value)
             except ValueError:
                 await self.client.send_private_message(
                     ctx.sender_id, f"{target_field} must be an integer."
                 )
                 return
+            err = _validate_anon_int(target_field, ivalue)
+            if err is not None:
+                await self.client.send_private_message(ctx.sender_id, err)
+                return
+            anon_cfg[target_field] = ivalue
         elif target_field == "enabled":
             anon_cfg["enabled"] = _coerce_bool(str(value))
         elif target_field == "scrub_wildcard_mentions":

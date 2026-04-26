@@ -34,7 +34,19 @@ treated as a new submission. Operators tune behaviour through
 ## Watch points
 
 - Wildcard scrub is a regex (`_scrub_wildcards` in `feature.py`) — add
-  patterns there, not at call sites.
+  patterns there, not at call sites. Currently covers `@**all**`,
+  `@_**all**_`, `@*role*`, and `@_*role*_` (silent role variant).
+- Empty / whitespace-only DMs are rejected before any pending row is
+  created, so an empty submit doesn't trap the next DM as
+  `SEND` / `CANCEL`.
+- Bound validation for the int-typed `!anon set` fields lives in
+  `admin_controls.feature._validate_anon_int` — it caps
+  `max_content_length` at Zulip's 10 000-char body limit and refuses
+  zero / negative values that would silently break the privacy
+  contract (e.g. `delete_after_minutes: 0`).
+- Throttle / cooldown rejections are NOT audit-logged: an audit row
+  keyed by `sender_id` would be the same privacy leak we're avoiding
+  by not auditing successful submissions.
 - Backticks in user content are escaped before they enter the
   preview's code fence (`_escape_for_code_fence`); breaking the fence
   would let users inject markdown into the admin-facing preview.
