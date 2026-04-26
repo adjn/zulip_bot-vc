@@ -13,7 +13,7 @@ admin approval (tracked as a long-term recommendation).
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from config import ConfigManager
@@ -37,11 +37,24 @@ class WatchRule:
 class PrivateAccessFeature(FeatureHandler):
     client: ClientProtocol
     config_mgr: ConfigManager
+    # Cache of parsed rules, keyed by ConfigManager.version. We rebuild only
+    # when the config has actually changed; on a busy stream this turns the
+    # per-message rule walk into a dict lookup. `None` means "never primed".
+    _cached_version: int | None = field(default=None, init=False, repr=False)
+    _cached_rules: list[WatchRule] = field(default_factory=list, init=False, repr=False)
 
     def _load_rules(self) -> list[WatchRule]:
+        # Fast path: config hasn't changed since the last parse.
+        version = self.config_mgr.version
+        if self._cached_version == version:
+            return self._cached_rules
+
         cfg = self.config_mgr.get().get("private_access", {})
         if not cfg.get("enabled", False):
-            return []
+            self._cached_version = version
+            self._cached_rules = []
+            return self._cached_rules
+
         rules_conf: list[dict[str, Any]] = cfg.get("watch_rules", []) or []
         rules: list[WatchRule] = []
         for r in rules_conf:
@@ -55,8 +68,13 @@ class PrivateAccessFeature(FeatureHandler):
                     )
                 )
             except KeyError:
+                # Logged once per config version (not once per message)
+                # because we're inside the cache-miss branch.
                 logger.warning("Invalid watch rule in config: %s", r)
-        return rules
+
+        self._cached_version = version
+        self._cached_rules = rules
+        return self._cached_rules
 
     def _anonymize_logging(self) -> bool:
         return bool(self.config_mgr.get().get("logging", {}).get("anonymize_user_ids", False))

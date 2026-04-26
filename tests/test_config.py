@@ -75,3 +75,35 @@ def test_update_persists_atomically(tmp_path: Path) -> None:
     cm2 = ConfigManager(str(p))
     cfg2 = cm2.load()
     assert cfg2["anonymous_posting"]["enabled"] is True
+
+
+def test_version_starts_at_zero_before_load(tmp_path: Path) -> None:
+    p = tmp_path / "config.yaml"
+    cm = ConfigManager(str(p))
+    assert cm.version == 0
+
+
+def test_version_bumps_on_load_and_update(tmp_path: Path) -> None:
+    p = tmp_path / "config.yaml"
+    cm = ConfigManager(str(p))
+    cm.load()
+    after_load = cm.version
+    assert after_load > 0
+
+    new = cm.get()
+    new["anonymous_posting"]["enabled"] = True
+    cm.update(new)
+    assert cm.version == after_load + 1
+
+
+def test_version_bumps_on_each_reload(tmp_path: Path) -> None:
+    """Re-calling load() should bump the version even when the on-disk
+    file is unchanged. This keeps the contract simple: 'version changed'
+    means 'caches must rebuild', without trying to detect no-op reloads.
+    """
+    p = tmp_path / "config.yaml"
+    cm = ConfigManager(str(p))
+    cm.load()
+    v1 = cm.version
+    cm.load()
+    assert cm.version == v1 + 1
