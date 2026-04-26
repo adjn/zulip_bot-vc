@@ -75,6 +75,19 @@ async def test_anon_set_int_validates(tmp_path: Path) -> None:
 
 
 @pytest.mark.trio
+async def test_anon_set_enabled_toggles(tmp_path: Path) -> None:
+    """`!anon set enabled true|false` must be admin-toggleable.
+
+    The README and copilot-instructions both promise this works; pin it."""
+    feat, _fc, cm, _storage = await _make(tmp_path)
+    assert cm.get()["anonymous_posting"]["enabled"] is False
+    await feat.handle(_dm(1, "!anon set enabled true"))
+    assert cm.get()["anonymous_posting"]["enabled"] is True
+    await feat.handle(_dm(1, "!anon set enabled false"))
+    assert cm.get()["anonymous_posting"]["enabled"] is False
+
+
+@pytest.mark.trio
 async def test_anon_set_quoted_stream_name(tmp_path: Path) -> None:
     feat, _fc, cm, _storage = await _make(tmp_path)
     await feat.handle(_dm(1, '!anon set stream "secret room"'))
