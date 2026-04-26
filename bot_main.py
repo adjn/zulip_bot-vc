@@ -20,6 +20,16 @@ from utils.scheduling import DeletionScheduler
 logger = logging.getLogger(__name__)
 
 
+# Event-loop reliability tunables. Kept as module-level constants so tests
+# can patch them low and not actually sleep for a minute.
+_REGISTER_BACKOFF_BASE = 1.0
+_REGISTER_BACKOFF_CAP = 60.0
+# Minimum wall-clock time between two register() calls. Prevents a
+# pathological "register, immediate BAD_EVENT_QUEUE_ID, register again"
+# busy loop when the server is unhealthy.
+_MIN_REREGISTER_INTERVAL = 1.0
+
+
 def _configure_logging(config_mgr: ConfigManager) -> None:
     level_name = config_mgr.get().get("logging", {}).get("level", "INFO") or "INFO"
     level = getattr(logging, level_name.upper(), logging.INFO)
@@ -32,14 +42,50 @@ def _configure_logging(config_mgr: ConfigManager) -> None:
 async def _event_loop(client: ZulipTrioClient, dispatcher: Dispatcher) -> None:
     """Register an event queue and dispatch events forever.
 
-    On `BAD_EVENT_QUEUE_ID` the queue is re-registered automatically.
+    Recovery model:
+
+    * On ``BAD_EVENT_QUEUE_ID`` the queue is re-registered. To prevent a
+      busy-loop when the server is rapidly invalidating queues, we
+      enforce ``_MIN_REREGISTER_INTERVAL`` between successive
+      registrations.
+    * If :meth:`ZulipTrioClient.register` itself fails (transient network
+      error, server 5xx), we sleep with exponential backoff up to
+      ``_REGISTER_BACKOFF_CAP`` and retry. The backoff counter resets
+      after a successful register.
     """
+    register_failures = 0
+    last_register_time = 0.0
     while True:
-        queue: dict[str, Any] = await client.register(
-            event_types=["message"],
-            client_gravatar=False,
-            apply_markdown=False,
-        )
+        # Rate-limit re-registrations so a flapping server can't spin
+        # us into a register-storm.
+        if last_register_time > 0:
+            elapsed = trio.current_time() - last_register_time
+            if elapsed < _MIN_REREGISTER_INTERVAL:
+                await trio.sleep(_MIN_REREGISTER_INTERVAL - elapsed)
+
+        try:
+            queue: dict[str, Any] = await client.register(
+                event_types=["message"],
+                client_gravatar=False,
+                apply_markdown=False,
+            )
+        except (RuntimeError, OSError, ConnectionError, TimeoutError) as exc:
+            register_failures += 1
+            sleep_for = min(
+                _REGISTER_BACKOFF_BASE * (2 ** (register_failures - 1)),
+                _REGISTER_BACKOFF_CAP,
+            )
+            logger.warning(
+                "register() failed (%s); retrying in %.1fs (failure #%d)",
+                exc,
+                sleep_for,
+                register_failures,
+            )
+            await trio.sleep(sleep_for)
+            continue
+
+        register_failures = 0
+        last_register_time = trio.current_time()
         logger.info(
             "Registered event queue id=%s last_event_id=%s",
             queue.get("queue_id"),
