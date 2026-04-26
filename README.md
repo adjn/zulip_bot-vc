@@ -7,7 +7,7 @@ Current features:
 - **Private access**: watch specific streams/topics for trigger phrases and subscribe users to target streams, reacting with `:saluting_face:`.
 - **Admin controls** via DM for updating YAML-based configuration at runtime.
 
-By default, **all feature modules are disabled**. You must explicitly enable them in `config.yaml` or via admin commands (for now, `enabled` flags are edited in the file).
+By default, **all feature modules are disabled**. You must explicitly enable them in `config.yaml` or via admin commands (e.g. `!anon set enabled true` over DM).
 
 ---
 
@@ -121,7 +121,7 @@ logging:
   anonymize_user_ids: false
 ```
 
-You can edit this file directly or use admin commands (recommended for most updates once the bot is running, though `enabled` flags are currently file-only).
+You can edit this file directly or use admin commands (recommended for most updates once the bot is running). DM-driven updates include `!anon set <field> <value>`, `!access add` / `!access remove`, and `!subscribe`; see the **Admin controls** section below.
 
 ---
 
@@ -172,8 +172,8 @@ anonymous_posting:
 
 **Notes:**
 
-- Pending confirmations are stored **only in memory**. If the bot restarts, those pending states are lost.
-- The scheduled deletions only store **message IDs and times**, not content.
+- Pending confirmations and scheduled deletions are persisted to SQLite, so a bot restart preserves the auto-delete privacy contract and any in-flight confirmation flows. See **Privacy and logging** below for the storage path.
+- The persisted scheduled-deletion records hold **only message IDs and times**, not message content.
 
 ---
 
@@ -261,12 +261,13 @@ Bot responds with current config in YAML (in a code block).
 
 **Update settings:**
 ```text
+!anon set enabled true
 !anon set stream anonymous
 !anon set topic general
 !anon set delete_after_minutes 10080
 ```
 
-The bot will confirm each change. You still need to set `anonymous_posting.enabled: true` in `config.yaml` (manually) or extend admin commands if you want to toggle `enabled` via commands in the future.
+The bot will confirm each change. `enabled` is settable over DM; the on-disk `config.yaml` is updated atomically so the change survives a restart.
 
 ### Manage access rules
 

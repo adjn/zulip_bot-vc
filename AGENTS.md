@@ -18,8 +18,9 @@ A modular Zulip bot in Python (3.12+) using the official `zulip` SDK and
 `bot_main.py` is the entry point. `core/` is the dispatch + Zulip client
 wrapper. `storage/` holds the SQLite-backed `Storage` (`storage/db.py`)
 and the YAML config store (`storage/file_store.py`). `utils/` is a thin
-helper layer. `tests/` uses `pytest` + `pytest-trio` with a fake client
-and an in-memory SQLite database.
+helper layer. `tests/` uses `pytest` + `pytest-trio` with a fake client;
+storage tests run against an in-memory SQLite (`:memory:`) for speed,
+production uses an on-disk DB at `./data/bot.db` by default.
 
 ## Hard rules — do not violate
 
@@ -129,7 +130,9 @@ more than a typical production codebase would. Three tiers:
    - A flag or argument that *seems* optional but isn't (e.g.
      `abandon_on_cancel=True`).
    - State that is held in memory only, with implications for restart
-     behaviour (e.g. `_pending`, `DeletionScheduler._tasks`).
+     behaviour or invalidation (e.g. the role-cache TTL in
+     `admin_controls.py`, the per-feature config-version cache in
+     `private_access.py`).
    - A defensive check whose threat model isn't obvious from the check
      itself.
 

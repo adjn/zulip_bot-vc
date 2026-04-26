@@ -29,9 +29,16 @@ admin DM commands.
 - `core.dispatcher.FeatureHandler` is the feature contract.
 - `core.client.ZulipTrioClient` wraps the SDK; tests use a fake matching the
   protocol shape in `tests/fakes.py`.
-- `ConfigManager` deep-merges defaults and persists atomically.
-- Scheduled deletions and pending confirmations are in-memory only today —
-  durability work goes in `storage/` and is gated by tests.
+- `core.commands.CommandRegistry` routes `!cmd` admin DMs by exact-match
+  on the first token and auto-renders `!help`. New admin commands plug
+  in via `AdminControlsFeature._build_registry`.
+- `ConfigManager` deep-merges defaults and persists atomically. It
+  exposes a monotonic `version` int so features can cache derived state
+  (e.g. parsed watch rules) and rebuild only when config changes.
+- Durable user-visible state (scheduled deletions, pending
+  confirmations, anonymous-posting cooldowns) lives in
+  `storage.db.Storage` (SQLite + WAL); the bot fails closed if the DB
+  path isn't writable.
 
 ## Style
 
