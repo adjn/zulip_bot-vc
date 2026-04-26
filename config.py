@@ -88,11 +88,28 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]
 
 @dataclass
 class ConfigManager:
-    """Manages bot configuration with YAML file persistence."""
+    """Manages bot configuration with YAML file persistence.
+
+    Exposes a monotonic `version` counter that bumps every time the config
+    is (re)loaded or replaced via :meth:`update`. Features that read config
+    in a hot path can cache derived state keyed by `version` and rebuild
+    only when it changes.
+
+    Caveat: `version` only bumps on :meth:`load` / :meth:`update`. Callers
+    that mutate the dict returned by :meth:`get` in place (a pattern used
+    by the admin command handlers and the test suite) must call
+    :meth:`update` if they need other features' caches to invalidate. The
+    production admin handlers already do this; tests that mutate in place
+    don't depend on the cache.
+    """
 
     path: str
     _store: YAMLFileStore = field(init=False)
     _config: dict[str, Any] = field(init=False, default_factory=dict)
+    # Bumps on every load / update. Starts at 0 so the first load → 1, which
+    # also lets caches use a `None` sentinel for "never primed" without
+    # clashing with any real version value.
+    version: int = field(init=False, default=0)
 
     def __post_init__(self) -> None:
         self._store = YAMLFileStore(self.path)
@@ -103,6 +120,7 @@ class ConfigManager:
             logger.info("Config file %s not found, creating default config", self.path)
             self._config = copy.deepcopy(DEFAULT_CONFIG)
             self._store.write(self._config)
+            self.version += 1
             return self._config
 
         data = self._store.read()
@@ -110,9 +128,11 @@ class ConfigManager:
             logger.warning("Config file malformed, resetting to defaults")
             self._config = copy.deepcopy(DEFAULT_CONFIG)
             self._store.write(self._config)
+            self.version += 1
             return self._config
 
         self._config = _deep_merge(DEFAULT_CONFIG, data)
+        self.version += 1
         return self._config
 
     def get(self) -> dict[str, Any]:
@@ -124,7 +144,9 @@ class ConfigManager:
 
         The caller is responsible for shape validation. A deep copy is taken
         so subsequent caller-side mutation cannot corrupt persisted state.
+        Bumps :attr:`version` so feature caches invalidate.
         """
         self._config = copy.deepcopy(new_config)
         self._store.write(self._config)
+        self.version += 1
         logger.info("Config updated and saved to %s", self.path)
