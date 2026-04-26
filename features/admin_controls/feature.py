@@ -20,13 +20,13 @@ from __future__ import annotations
 import logging
 import re
 import shlex
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
 import yaml
 
 from config import ConfigManager
+from core.authz import Authorizer, Role
 from core.client import ClientProtocol
 from core.commands import Command, CommandContext, CommandRegistry
 from core.context import FeatureContext
@@ -61,8 +61,6 @@ def _coerce_bool(value: str) -> bool:
 @dataclass
 class AdminControlsFeature(FeatureHandler):
     ctx: FeatureContext
-    # role cache: sender_id -> (is_admin_or_owner, expires_at_monotonic)
-    _role_cache: dict[int, tuple[bool, float]] = field(default_factory=dict, repr=False, init=False)
     _registry: CommandRegistry = field(default_factory=CommandRegistry, repr=False, init=False)
 
     def __post_init__(self) -> None:
@@ -85,29 +83,26 @@ class AdminControlsFeature(FeatureHandler):
         assert scheduler is not None, "AdminControlsFeature requires ctx.scheduler"
         return scheduler
 
+    @property
+    def authz(self) -> Authorizer:
+        authz = self.ctx.authz
+        assert authz is not None, "AdminControlsFeature requires ctx.authz"
+        return authz
+
     # ---------------------------------------------------------------- guards
 
     def _admin_cfg(self) -> dict[str, Any]:
         return self.config_mgr.get().get("admin", {})
-
-    async def _is_admin(self, sender_id: int) -> bool:
-        ttl = float(self._admin_cfg().get("role_cache_ttl_seconds", 60))
-        cached = self._role_cache.get(sender_id)
-        if cached is not None:
-            ok, expires_at = cached
-            if time.monotonic() < expires_at:
-                return ok
-        user = await self.client.get_user_by_id(sender_id)
-        ok = bool(user and (user.get("is_admin") or user.get("is_owner")))
-        self._role_cache[sender_id] = (ok, time.monotonic() + ttl)
-        return ok
 
     async def handles(self, event: MessageEvent) -> bool:
         if event.message_type != "private":
             return False
         if not event.content.strip().startswith("!"):
             return False
-        return await self._is_admin(event.sender_id)
+        # Today every admin command requires Role.admin. Future commands
+        # can use `self.authz.require(..., Role.super_admin)` directly to
+        # opt into a stricter level.
+        return await self.authz.require(event.sender_id, Role.admin)
 
     # ---------------------------------------------------------------- routing
 

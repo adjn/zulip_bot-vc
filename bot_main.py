@@ -9,6 +9,7 @@ from typing import Any
 import trio
 
 from config import ConfigManager
+from core.authz import Authorizer
 from core.client import QueueInvalidated, ZulipTrioClient
 from core.context import FeatureContext
 from core.dispatcher import Dispatcher
@@ -159,6 +160,7 @@ async def main() -> None:
     # plain async function in tests/.
     scheduler = DeletionScheduler(delete_fn=client.delete_message, storage=storage)
     dispatcher = Dispatcher(bot_user_id=bot_user_id if isinstance(bot_user_id, int) else None)
+    authz = Authorizer(client=client, config_mgr=config_mgr)
 
     # Single shared dependency container; new cross-cutting resources
     # (audit log, authz, …) plug in by adding a field to FeatureContext
@@ -168,6 +170,7 @@ async def main() -> None:
         config_mgr=config_mgr,
         storage=storage,
         scheduler=scheduler,
+        authz=authz,
         bot_user_id=bot_user_id if isinstance(bot_user_id, int) else None,
     )
 

@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from config import ConfigManager
+from core.authz import Authorizer
 from core.context import FeatureContext
 from core.models import MessageEvent
 from features.admin_controls import AdminControlsFeature, _redact
@@ -34,8 +35,9 @@ async def _make(
     cm.load()
     storage = await Storage.open(":memory:")
     sched = DeletionScheduler(delete_fn=fc.delete_message, storage=storage)
+    authz = Authorizer(client=fc, config_mgr=cm)
     feat = AdminControlsFeature(
-        ctx=FeatureContext(client=fc, config_mgr=cm, storage=storage, scheduler=sched)
+        ctx=FeatureContext(client=fc, config_mgr=cm, storage=storage, scheduler=sched, authz=authz)
     )
     return feat, fc, cm, storage
 
