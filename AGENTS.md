@@ -9,11 +9,16 @@ the same guidance for GitHub Copilot.
 A modular Zulip bot in Python (3.12+) using the official `zulip` SDK and
 `trio`. Three features today:
 
-- `features/anonymous_posting.py` — DM → confirmation → relay to a stream,
+- `features/anonymous_posting/` — DM → confirmation → relay to a stream,
   with a persistent schedule (SQLite) to delete the relayed message later.
-- `features/private_access.py` — watch `(stream, topic)` for an exact phrase,
+- `features/private_access/` — watch `(stream, topic)` for an exact phrase,
   auto-subscribe the sender to a target stream and react.
-- `features/admin_controls.py` — DM-only `!`-prefixed admin commands.
+- `features/admin_controls/` — DM-only `!`-prefixed admin commands.
+
+Each feature folder holds `feature.py` (the `FeatureHandler`
+implementation), an `__init__.py` re-export shim, and a small
+`README.md` documenting purpose / config keys / commands / storage
+tables / watch points.
 
 `bot_main.py` is the entry point. `core/` is the dispatch + Zulip client
 wrapper. `storage/` holds the SQLite-backed `Storage` (`storage/db.py`)
@@ -83,7 +88,7 @@ production uses an on-disk DB at `./data/bot.db` by default.
 ## Adding admin commands
 
 Admin commands live behind `core.commands.CommandRegistry` in
-`features/admin_controls.py`. To add a new one:
+`features/admin_controls/feature.py`. To add a new one:
 
 1. Write an `async def _handle_xxx(self, ctx: CommandContext) -> None`
    method on `AdminControlsFeature`. It receives the parsed `tokens`
