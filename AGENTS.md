@@ -79,6 +79,25 @@ and an in-memory SQLite database.
   introduce a separate `FakeStorage` — the real implementation is fast
   and tests against real SQL behaviour.
 
+## Adding admin commands
+
+Admin commands live behind `core.commands.CommandRegistry` in
+`features/admin_controls.py`. To add a new one:
+
+1. Write an `async def _handle_xxx(self, ctx: CommandContext) -> None`
+   method on `AdminControlsFeature`. It receives the parsed `tokens`
+   and (for YAML-bodied commands) the `body`. It owns its own user
+   reply via `self.client.send_private_message`.
+2. Register it in `_build_registry()` with a `Command(name, summary,
+   usage, handler)`. Use `!command` (with the leading bang) as `name`.
+3. That's it — `!help`, `!help <command>`, and the "unknown command"
+   reply pick it up automatically. On argument errors, call
+   `self._send_usage(ctx, "!command")` for a consistently formatted
+   reply.
+
+The registry is *exact-match* on the first whitespace token. There is
+no `startswith` fallback; `!configfoo` will not route to `!config`.
+
 ## Code style
 
 - PEP 8 + ruff defaults (`pyproject.toml`).
