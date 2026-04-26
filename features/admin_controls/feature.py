@@ -26,6 +26,7 @@ from typing import Any
 import yaml
 
 from config import ConfigManager
+from core.audit import AuditLog
 from core.authz import Authorizer, Role
 from core.client import ClientProtocol
 from core.commands import Command, CommandContext, CommandRegistry
@@ -88,6 +89,13 @@ class AdminControlsFeature(FeatureHandler):
         authz = self.ctx.authz
         assert authz is not None, "AdminControlsFeature requires ctx.authz"
         return authz
+
+    @property
+    def audit(self) -> AuditLog | None:
+        # Optional on purpose: if no audit log is configured into the
+        # ctx, admin commands still work — they just don't persist a
+        # trace. Tests and dev shells often run without one.
+        return self.ctx.audit
 
     # ---------------------------------------------------------------- guards
 
@@ -303,6 +311,13 @@ class AdminControlsFeature(FeatureHandler):
             return
 
         self.config_mgr.update(cfg)
+        if self.audit is not None:
+            await self.audit.record(
+                "config.anon.set",
+                actor_id=ctx.sender_id,
+                target=f"anonymous_posting.{target_field}",
+                details={"value": anon_cfg.get(target_field)},
+            )
         await self.client.send_private_message(
             ctx.sender_id,
             f"Anonymous posting config updated: {target_field}={value}",
@@ -355,6 +370,16 @@ class AdminControlsFeature(FeatureHandler):
                 }
             )
             self.config_mgr.update(cfg)
+            if self.audit is not None:
+                await self.audit.record(
+                    "access.add",
+                    actor_id=ctx.sender_id,
+                    target=f"{data['stream']}/{data['topic']}",
+                    details={
+                        "phrase": data["phrase"],
+                        "target_stream": data["target_stream"],
+                    },
+                )
             await self.client.send_private_message(ctx.sender_id, "Access rule added.")
             return
 
@@ -378,6 +403,13 @@ class AdminControlsFeature(FeatureHandler):
         p_cfg["watch_rules"] = rules
         self.config_mgr.update(cfg)
         removed = before - len(rules)
+        if self.audit is not None:
+            await self.audit.record(
+                "access.remove",
+                actor_id=ctx.sender_id,
+                target=f"{data['stream']}/{data['topic']}",
+                details={"phrase": data["phrase"], "removed": removed},
+            )
         await self.client.send_private_message(ctx.sender_id, f"Access rules removed: {removed}.")
 
     # ---------------------------------------------------------------- !subscribe
@@ -415,6 +447,16 @@ class AdminControlsFeature(FeatureHandler):
             parts.append(f"ℹ️ Already subscribed to: {', '.join(existing)}")
         if not parts:
             parts.append("✅ Subscription request completed")
+        if self.audit is not None:
+            await self.audit.record(
+                "bot.subscribe",
+                actor_id=ctx.sender_id,
+                details={
+                    "requested": list(streams),
+                    "subscribed": new_streams,
+                    "already_subscribed": existing,
+                },
+            )
         await self.client.send_private_message(ctx.sender_id, "\n".join(parts))
 
     # ---------------------------------------------------------------- helpers

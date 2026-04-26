@@ -15,10 +15,11 @@ What's persisted here:
 * ``pending_confirmations`` -- a user's in-flight anonymous post awaiting
   their ``SEND`` / ``CANCEL`` reply.
 * ``cooldowns`` -- per-sender ``last_post_at`` for rate limiting.
+* ``audit_log`` -- append-only record of admin-driven actions, written
+  by :class:`core.audit.AuditLog`.
 
 What's deliberately *not* persisted (yet):
 
-* Audit log of admin actions -- separate concern, future PR.
 * Event-queue checkpoint (``queue_id`` / ``last_event_id``) -- needs
   careful re-register-with-old-queue logic, future PR.
 * Role cache -- 60s TTL, in-memory is fine.
@@ -51,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 # Bumped whenever the schema changes. Migrations live in
 # :func:`_apply_migrations` and are idempotent.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 _T = TypeVar("_T")
@@ -348,6 +349,48 @@ class Storage:
 
         return await self._run(_do)
 
+    # ------------------------------------------------------------------
+    # audit_log
+    # ------------------------------------------------------------------
+
+    async def insert_audit(
+        self,
+        *,
+        action: str,
+        actor_id: int | None,
+        target: str | None,
+        details_json: str | None,
+        ts: datetime,
+    ) -> int:
+        """Append an audit row and return its newly-assigned ``id``."""
+        ts_iso = _iso(ts)
+
+        def _do() -> int:
+            cur = self._conn.execute(
+                "INSERT INTO audit_log (ts, action, actor_id, target, details) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (ts_iso, action, actor_id, target, details_json),
+            )
+            # AUTOINCREMENT guarantees lastrowid is set; sqlite3 also fills
+            # it on plain INTEGER PRIMARY KEY rows.
+            return int(cur.lastrowid or 0)
+
+        return await self._run(_do)
+
+    async def recent_audit(self, limit: int = 50) -> list[dict[str, object]]:
+        """Return the most recent audit rows, newest first."""
+
+        def _do() -> list[dict[str, object]]:
+            cur = self._conn.execute(
+                "SELECT id, ts, action, actor_id, target, details "
+                "FROM audit_log ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+            cols = [c[0] for c in cur.description]
+            return [dict(zip(cols, row, strict=True)) for row in cur.fetchall()]
+
+        return await self._run(_do)
+
 
 # ----------------------------------------------------------------------
 # migrations
@@ -417,5 +460,29 @@ def _apply_migrations(conn: sqlite3.Connection) -> None:
             conn.execute("ROLLBACK")
             raise
         version = 1
+
+    if version < 2:
+        # v2: audit log of admin-driven actions. Append-only; reads are
+        # `ORDER BY id DESC LIMIT N` so the index on `ts` is mainly there
+        # for future range queries (e.g. "last 24h").
+        conn.execute("BEGIN")
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS audit_log ("
+                "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "  ts TEXT NOT NULL,"
+                "  action TEXT NOT NULL,"
+                "  actor_id INTEGER,"
+                "  target TEXT,"
+                "  details TEXT"
+                ")"
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts)")
+            _set_version(conn, 2)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        version = 2
 
     logger.info("Database migrated to schema version %s", version)
