@@ -27,6 +27,7 @@ from typing import Any
 
 from config import ConfigManager
 from core.client import ClientProtocol
+from core.context import FeatureContext
 from core.dispatcher import FeatureHandler
 from core.models import MessageEvent
 from storage.db import Storage
@@ -92,10 +93,30 @@ class AnonymousPostingFeature(FeatureHandler):
     privacy contract depends on it.
     """
 
-    client: ClientProtocol
-    config_mgr: ConfigManager
-    scheduler: DeletionScheduler
-    storage: Storage
+    ctx: FeatureContext
+
+    # Read-only views over `ctx`. Method bodies use `self.client` etc. just
+    # as before; the property layer keeps the diff small and lets mypy see
+    # narrowed (non-Optional) types for the deps we always require.
+    @property
+    def client(self) -> ClientProtocol:
+        return self.ctx.client
+
+    @property
+    def config_mgr(self) -> ConfigManager:
+        return self.ctx.config_mgr
+
+    @property
+    def scheduler(self) -> DeletionScheduler:
+        scheduler = self.ctx.scheduler
+        assert scheduler is not None, "AnonymousPostingFeature requires ctx.scheduler"
+        return scheduler
+
+    @property
+    def storage(self) -> Storage:
+        storage = self.ctx.storage
+        assert storage is not None, "AnonymousPostingFeature requires ctx.storage"
+        return storage
 
     # ---------------------------------------------------------------- guards
 

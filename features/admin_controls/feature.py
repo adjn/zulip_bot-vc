@@ -29,6 +29,7 @@ import yaml
 from config import ConfigManager
 from core.client import ClientProtocol
 from core.commands import Command, CommandContext, CommandRegistry
+from core.context import FeatureContext
 from core.dispatcher import FeatureHandler
 from core.models import MessageEvent
 from utils.scheduling import DeletionScheduler
@@ -59,15 +60,30 @@ def _coerce_bool(value: str) -> bool:
 
 @dataclass
 class AdminControlsFeature(FeatureHandler):
-    client: ClientProtocol
-    config_mgr: ConfigManager
-    scheduler: DeletionScheduler
+    ctx: FeatureContext
     # role cache: sender_id -> (is_admin_or_owner, expires_at_monotonic)
-    _role_cache: dict[int, tuple[bool, float]] = field(default_factory=dict, repr=False)
-    _registry: CommandRegistry = field(default_factory=CommandRegistry, repr=False)
+    _role_cache: dict[int, tuple[bool, float]] = field(default_factory=dict, repr=False, init=False)
+    _registry: CommandRegistry = field(default_factory=CommandRegistry, repr=False, init=False)
 
     def __post_init__(self) -> None:
         self._build_registry()
+
+    # Read-only views over `ctx`. Method bodies use `self.client` etc. just
+    # as before; the property layer keeps the diff small and lets mypy see
+    # narrowed (non-Optional) types for the deps we always require.
+    @property
+    def client(self) -> ClientProtocol:
+        return self.ctx.client
+
+    @property
+    def config_mgr(self) -> ConfigManager:
+        return self.ctx.config_mgr
+
+    @property
+    def scheduler(self) -> DeletionScheduler:
+        scheduler = self.ctx.scheduler
+        assert scheduler is not None, "AdminControlsFeature requires ctx.scheduler"
+        return scheduler
 
     # ---------------------------------------------------------------- guards
 
