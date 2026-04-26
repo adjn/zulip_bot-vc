@@ -39,6 +39,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from config import ConfigManager
+from core.audit import AuditLog
 from core.authz import Authorizer
 from core.client import ClientProtocol
 from storage.db import Storage
@@ -54,4 +55,5 @@ class FeatureContext:
     storage: Storage | None = None
     scheduler: DeletionScheduler | None = None
     authz: Authorizer | None = None
+    audit: AuditLog | None = None
     bot_user_id: int | None = None

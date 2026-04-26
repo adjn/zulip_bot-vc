@@ -48,6 +48,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # How long to cache an admin/owner role lookup before re-checking.
         "role_cache_ttl_seconds": 60,
     },
+    "audit": {
+        # Master switch: when False, the audit log writes nothing and
+        # broadcasts nothing. Useful for tests and dev shells.
+        "enabled": True,
+        # Optional stream for live audit broadcasts. None = persist only.
+        "stream": None,
+        "topic": "audit",
+    },
     "logging": {
         "level": "INFO",
         "anonymize_user_ids": False,

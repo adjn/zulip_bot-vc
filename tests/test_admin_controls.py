@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from config import ConfigManager
+from core.audit import AuditLog
 from core.authz import Authorizer
 from core.context import FeatureContext
 from core.models import MessageEvent
@@ -36,8 +37,16 @@ async def _make(
     storage = await Storage.open(":memory:")
     sched = DeletionScheduler(delete_fn=fc.delete_message, storage=storage)
     authz = Authorizer(client=fc, config_mgr=cm)
+    audit = AuditLog(storage=storage, config_mgr=cm, client=fc)
     feat = AdminControlsFeature(
-        ctx=FeatureContext(client=fc, config_mgr=cm, storage=storage, scheduler=sched, authz=authz)
+        ctx=FeatureContext(
+            client=fc,
+            config_mgr=cm,
+            storage=storage,
+            scheduler=sched,
+            authz=authz,
+            audit=audit,
+        )
     )
     return feat, fc, cm, storage
 
@@ -177,3 +186,24 @@ async def test_anon_set_unknown_field_hints_at_help(tmp_path: Path) -> None:
     feat, fc, _, _storage = await _make(tmp_path)
     await feat.handle(_dm(1, "!anon set wat 1"))
     assert any("!help !anon" in d.content for d in fc.dms)
+
+
+@pytest.mark.trio
+async def test_anon_set_writes_audit_entry(tmp_path: Path) -> None:
+    """Mutating admin commands should leave a trail in the audit log."""
+    feat, _fc, _, storage = await _make(tmp_path)
+    await feat.handle(_dm(1, "!anon set enabled true"))
+    rows = await storage.recent_audit(limit=10)
+    assert len(rows) == 1
+    assert rows[0]["action"] == "config.anon.set"
+    assert rows[0]["actor_id"] == 1
+    assert rows[0]["target"] == "anonymous_posting.enabled"
+
+
+@pytest.mark.trio
+async def test_subscribe_writes_audit_entry(tmp_path: Path) -> None:
+    feat, _fc, _, storage = await _make(tmp_path)
+    await feat.handle(_dm(1, "!subscribe general"))
+    rows = await storage.recent_audit(limit=10)
+    actions = [r["action"] for r in rows]
+    assert "bot.subscribe" in actions
