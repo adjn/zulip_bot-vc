@@ -225,3 +225,36 @@ async def test_status_includes_schema_and_uptime(tmp_path: Path) -> None:
     assert "schema version" in msg
     # _make doesn't set started_at, so uptime should fall back to "unknown".
     assert "Uptime" in msg
+
+
+@pytest.mark.trio
+async def test_anon_set_rejects_negative_max_content_length(tmp_path: Path) -> None:
+    feat, fc, cm, _storage = await _make(tmp_path)
+    await feat.handle(_dm(1, "!anon set max_content_length -5"))
+    msg = fc.dms[-1].content
+    assert "between" in msg
+    # Bad value must NOT be persisted.
+    assert cm.get()["anonymous_posting"].get("max_content_length") != -5
+
+
+@pytest.mark.trio
+async def test_anon_set_rejects_overlarge_max_content_length(tmp_path: Path) -> None:
+    """Zulip caps message bodies at 10000 chars; reject values above that."""
+    feat, fc, _cm, _storage = await _make(tmp_path)
+    await feat.handle(_dm(1, "!anon set max_content_length 99999"))
+    assert any("between" in d.content for d in fc.dms)
+
+
+@pytest.mark.trio
+async def test_anon_set_allows_zero_cooldown(tmp_path: Path) -> None:
+    """0 seconds is a valid (albeit floodgate-opening) cooldown."""
+    feat, _fc, cm, _storage = await _make(tmp_path)
+    await feat.handle(_dm(1, "!anon set min_seconds_between_posts 0"))
+    assert cm.get()["anonymous_posting"]["min_seconds_between_posts"] == 0
+
+
+@pytest.mark.trio
+async def test_anon_set_rejects_zero_pending_ttl(tmp_path: Path) -> None:
+    feat, fc, _cm, _storage = await _make(tmp_path)
+    await feat.handle(_dm(1, "!anon set pending_ttl_minutes 0"))
+    assert any("between" in d.content for d in fc.dms)

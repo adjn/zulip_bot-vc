@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 # Conservative wildcard-mention scrub. Zulip supports several mention
 # syntaxes that ping every subscriber of a stream/topic — we don't want
-# anonymous posts to be able to mass-notify, so we defang them. The three
+# anonymous posts to be able to mass-notify, so we defang them. The
 # patterns below cover:
 #   1. `@**all**` / `@**everyone**` / `@**stream**` / `@**topic**` /
 #      `@**channel**` — the common wildcard mentions.
@@ -46,12 +46,14 @@ logger = logging.getLogger(__name__)
 #      without notification visually but which still resolves server-side.
 #   3. `@*role*` — role mentions (e.g. `@*moderators*`); we don't try to
 #      enumerate role names, we just neutralise the syntax.
+#   4. `@_*role*_` — the silent variant of role mentions; same defense.
 # For each match we replace the leading ASCII '@' with the fullwidth '＠'
 # (U+FF20), which looks identical to a human reader but isn't recognised
 # by Zulip's mention parser.
 _WILDCARD_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"@\*\*(all|everyone|stream|topic|channel)\*\*", re.IGNORECASE),
     re.compile(r"@_\*\*(all|everyone|stream|topic|channel)\*\*_", re.IGNORECASE),
+    re.compile(r"@_\*[^*]+\*_"),
     re.compile(r"@\*[^*]+\*"),
 )
 
@@ -194,6 +196,17 @@ class AnonymousPostingFeature(FeatureHandler):
             return
 
         # --- new flow -------------------------------------------------
+        # Reject empty / whitespace-only submissions before doing
+        # anything else: neither the cooldown clock nor the pending row
+        # should advance for a "message" with no content.
+        original = event.content
+        if not original.strip():
+            await self.client.send_private_message(
+                event.sender_id,
+                "Your message is empty. Type some content and try again.",
+            )
+            return
+
         # Per-sender cooldown
         last = await self.storage.fetch_cooldown(event.sender_id)
         if last is not None:
@@ -204,9 +217,13 @@ class AnonymousPostingFeature(FeatureHandler):
                     event.sender_id,
                     f"Please wait {wait}s before posting again.",
                 )
+                # Note: we deliberately do NOT audit-log throttle hits —
+                # an audit row keyed by sender_id is the same privacy
+                # leak as auditing successful submissions, which we
+                # explicitly avoid (see core/audit.py docstring).
+                logger.info("anon throttled (sender_id redacted)")
                 return
 
-        original = event.content
         if len(original) > max_len:
             await self.client.send_private_message(
                 event.sender_id,
