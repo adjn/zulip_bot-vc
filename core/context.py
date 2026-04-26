@@ -37,6 +37,7 @@ happens at startup.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from config import ConfigManager
 from core.audit import AuditLog
@@ -57,3 +58,7 @@ class FeatureContext:
     authz: Authorizer | None = None
     audit: AuditLog | None = None
     bot_user_id: int | None = None
+    # Wall-clock time the ctx was constructed (i.e. roughly bot
+    # startup). Used by the status command to report uptime; left as
+    # ``None`` in tests that don't care.
+    started_at: datetime | None = None

@@ -207,3 +207,21 @@ async def test_subscribe_writes_audit_entry(tmp_path: Path) -> None:
     rows = await storage.recent_audit(limit=10)
     actions = [r["action"] for r in rows]
     assert "bot.subscribe" in actions
+
+
+@pytest.mark.trio
+async def test_ping_replies_pong(tmp_path: Path) -> None:
+    feat, fc, _, _storage = await _make(tmp_path)
+    await feat.handle(_dm(1, "!ping"))
+    assert any("pong" in d.content for d in fc.dms)
+
+
+@pytest.mark.trio
+async def test_status_includes_schema_and_uptime(tmp_path: Path) -> None:
+    feat, fc, _, _storage = await _make(tmp_path)
+    await feat.handle(_dm(1, "!status"))
+    msg = fc.dms[0].content
+    assert "Bot status" in msg
+    assert "schema version" in msg
+    # _make doesn't set started_at, so uptime should fall back to "unknown".
+    assert "Uptime" in msg

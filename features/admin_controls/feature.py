@@ -33,6 +33,7 @@ from core.commands import Command, CommandContext, CommandRegistry
 from core.context import FeatureContext
 from core.dispatcher import FeatureHandler
 from core.models import MessageEvent
+from core.status import StatusReport
 from utils.scheduling import DeletionScheduler
 
 logger = logging.getLogger(__name__)
@@ -218,6 +219,22 @@ class AdminControlsFeature(FeatureHandler):
                     'Example: `!subscribe general announcements "anon room"`'
                 ),
                 handler=self._handle_subscribe,
+            )
+        )
+        self._registry.register(
+            Command(
+                name="!ping",
+                summary="liveness check — replies with `pong`",
+                usage="`!ping` — confirms the bot is processing admin DMs.",
+                handler=self._handle_ping,
+            )
+        )
+        self._registry.register(
+            Command(
+                name="!status",
+                summary="show bot uptime and runtime diagnostics",
+                usage="`!status` — uptime, schema version, queue health, etc.",
+                handler=self._handle_status,
             )
         )
 
@@ -458,6 +475,18 @@ class AdminControlsFeature(FeatureHandler):
                 },
             )
         await self.client.send_private_message(ctx.sender_id, "\n".join(parts))
+
+    # ---------------------------------------------------------------- !ping / !status
+
+    async def _handle_ping(self, ctx: CommandContext) -> None:
+        # Plain liveness check. We deliberately don't measure round-trip
+        # latency here — Zulip messages don't carry a clean send-time we
+        # can trust, so any "ping took N ms" number would be misleading.
+        await self.client.send_private_message(ctx.sender_id, "🏓 pong")
+
+    async def _handle_status(self, ctx: CommandContext) -> None:
+        report = await StatusReport.gather(self.ctx)
+        await self.client.send_private_message(ctx.sender_id, report.render())
 
     # ---------------------------------------------------------------- helpers
 
