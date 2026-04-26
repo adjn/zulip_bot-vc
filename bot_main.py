@@ -10,6 +10,7 @@ import trio
 
 from config import ConfigManager
 from core.client import QueueInvalidated, ZulipTrioClient
+from core.context import FeatureContext
 from core.dispatcher import Dispatcher
 from features.admin_controls import AdminControlsFeature
 from features.anonymous_posting import AnonymousPostingFeature
@@ -159,11 +160,20 @@ async def main() -> None:
     scheduler = DeletionScheduler(delete_fn=client.delete_message, storage=storage)
     dispatcher = Dispatcher(bot_user_id=bot_user_id if isinstance(bot_user_id, int) else None)
 
-    admin_feature = AdminControlsFeature(client=client, config_mgr=config_mgr, scheduler=scheduler)
-    anon_feature = AnonymousPostingFeature(
-        client=client, config_mgr=config_mgr, scheduler=scheduler, storage=storage
+    # Single shared dependency container; new cross-cutting resources
+    # (audit log, authz, …) plug in by adding a field to FeatureContext
+    # rather than touching every feature constructor.
+    ctx = FeatureContext(
+        client=client,
+        config_mgr=config_mgr,
+        storage=storage,
+        scheduler=scheduler,
+        bot_user_id=bot_user_id if isinstance(bot_user_id, int) else None,
     )
-    access_feature = PrivateAccessFeature(client=client, config_mgr=config_mgr)
+
+    admin_feature = AdminControlsFeature(ctx=ctx)
+    anon_feature = AnonymousPostingFeature(ctx=ctx)
+    access_feature = PrivateAccessFeature(ctx=ctx)
     # Order matters: dispatcher walks features in registration order and
     # short-circuits on the first `handles()` that returns True. Admin must
     # be first so `!`-prefixed DMs are routed to admin commands before

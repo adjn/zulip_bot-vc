@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from config import ConfigManager
+from core.context import FeatureContext
 from core.models import MessageEvent
 from features.anonymous_posting import (
     AnonymousPostingFeature,
@@ -49,7 +50,9 @@ async def _make_feature(
     cm = _enabled_cm(tmp_path)
     s = storage if storage is not None else await Storage.open(":memory:")
     sched = DeletionScheduler(delete_fn=fc.delete_message, storage=s)
-    feat = AnonymousPostingFeature(client=fc, config_mgr=cm, scheduler=sched, storage=s)
+    feat = AnonymousPostingFeature(
+        ctx=FeatureContext(client=fc, config_mgr=cm, storage=s, scheduler=sched)
+    )
     return feat, fc, sched, s
 
 

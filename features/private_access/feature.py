@@ -18,6 +18,7 @@ from typing import Any
 
 from config import ConfigManager
 from core.client import ClientProtocol
+from core.context import FeatureContext
 from core.dispatcher import FeatureHandler
 from core.models import MessageEvent
 from utils.matching import normalize_phrase
@@ -35,13 +36,22 @@ class WatchRule:
 
 @dataclass
 class PrivateAccessFeature(FeatureHandler):
-    client: ClientProtocol
-    config_mgr: ConfigManager
+    ctx: FeatureContext
     # Cache of parsed rules, keyed by ConfigManager.version. We rebuild only
     # when the config has actually changed; on a busy stream this turns the
     # per-message rule walk into a dict lookup. `None` means "never primed".
     _cached_version: int | None = field(default=None, init=False, repr=False)
     _cached_rules: list[WatchRule] = field(default_factory=list, init=False, repr=False)
+
+    # Read-only views over `ctx` so method bodies keep using `self.client`
+    # / `self.config_mgr` as before.
+    @property
+    def client(self) -> ClientProtocol:
+        return self.ctx.client
+
+    @property
+    def config_mgr(self) -> ConfigManager:
+        return self.ctx.config_mgr
 
     def _load_rules(self) -> list[WatchRule]:
         # Fast path: config hasn't changed since the last parse.

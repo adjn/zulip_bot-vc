@@ -15,8 +15,18 @@ from pathlib import Path
 import pytest
 
 from config import ConfigManager
+from core.context import FeatureContext
 from features.private_access import PrivateAccessFeature
 from tests.fakes import FakeClient
+
+
+def _make_feat(cm: ConfigManager) -> PrivateAccessFeature:
+    """Construct a `PrivateAccessFeature` with a minimal context.
+
+    PrivateAccess only needs `client` and `config_mgr`; the other
+    `FeatureContext` fields are left at their defaults (None).
+    """
+    return PrivateAccessFeature(ctx=FeatureContext(client=FakeClient(), config_mgr=cm))
 
 
 def _enabled_cm(tmp_path: Path) -> ConfigManager:
@@ -38,7 +48,7 @@ def _enabled_cm(tmp_path: Path) -> ConfigManager:
 
 def test_load_rules_returns_parsed_rules(tmp_path: Path) -> None:
     cm = _enabled_cm(tmp_path)
-    feat = PrivateAccessFeature(client=FakeClient(), config_mgr=cm)
+    feat = _make_feat(cm)
     rules = feat._load_rules()
     assert len(rules) == 1
     assert rules[0].phrase == "let me in"
@@ -48,13 +58,13 @@ def test_load_rules_returns_parsed_rules(tmp_path: Path) -> None:
 def test_disabled_returns_empty(tmp_path: Path) -> None:
     cm = ConfigManager(str(tmp_path / "config.yaml"))
     cm.load()  # default: private_access.enabled = False
-    feat = PrivateAccessFeature(client=FakeClient(), config_mgr=cm)
+    feat = _make_feat(cm)
     assert feat._load_rules() == []
 
 
 def test_cache_hits_when_version_unchanged(tmp_path: Path) -> None:
     cm = _enabled_cm(tmp_path)
-    feat = PrivateAccessFeature(client=FakeClient(), config_mgr=cm)
+    feat = _make_feat(cm)
     first = feat._load_rules()
     second = feat._load_rules()
     # Same list object — we returned the cached reference, didn't rebuild.
@@ -63,7 +73,7 @@ def test_cache_hits_when_version_unchanged(tmp_path: Path) -> None:
 
 def test_cache_invalidates_on_config_update(tmp_path: Path) -> None:
     cm = _enabled_cm(tmp_path)
-    feat = PrivateAccessFeature(client=FakeClient(), config_mgr=cm)
+    feat = _make_feat(cm)
     feat._load_rules()  # prime
 
     cfg = cm.get()
@@ -84,7 +94,7 @@ def test_cache_invalidates_on_config_update(tmp_path: Path) -> None:
 
 def test_cache_invalidates_when_feature_disabled(tmp_path: Path) -> None:
     cm = _enabled_cm(tmp_path)
-    feat = PrivateAccessFeature(client=FakeClient(), config_mgr=cm)
+    feat = _make_feat(cm)
     assert feat._load_rules()  # primed and non-empty
 
     cfg = cm.get()
@@ -109,7 +119,7 @@ def test_invalid_rule_warns_once_per_version(
     ]
     cm.update(cfg)
 
-    feat = PrivateAccessFeature(client=FakeClient(), config_mgr=cm)
+    feat = _make_feat(cm)
     with caplog.at_level(logging.WARNING, logger="features.private_access"):
         for _ in range(5):
             feat._load_rules()
